@@ -1,0 +1,35 @@
+{
+  "name": "daggerbrain-feedback",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Discord bug bot built on Cloudflare Workers, Hono, and D1.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "cf-typegen": "wrangler types",
+    "db:migrate:local": "wrangler d1 migrations apply daggerbrain_feedback --local",
+    "db:migrate:remote": "wrangler d1 migrations apply daggerbrain_feedback --remote",
+    "register-commands": "wrangler deploy --dry-run",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "cloudflare-workers",
+    "discord",
+    "hono",
+    "typescript"
+  ],
+  "license": "ISC",
+  "dependencies": {
+    "hono": "^4.12.8",
+    "tweetnacl": "^1.0.3",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260317.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.75.0"
+  }
+}

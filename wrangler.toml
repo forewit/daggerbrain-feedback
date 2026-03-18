@@ -1,0 +1,12 @@
+name = "daggerbrain-feedback"
+main = "src/index.ts"
+compatibility_date = "2026-03-18"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "daggerbrain_feedback"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[vars]
+DISCORD_MOD_ROLE_IDS = ""
