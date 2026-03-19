@@ -136,9 +136,6 @@ export function getModalFieldValues(
 
   if (kind === 'feature') {
     return {
-      [FEATURE_MODAL_FIELDS.title]: typeof values[FEATURE_MODAL_FIELDS.title] === 'string' ? values[FEATURE_MODAL_FIELDS.title] : '',
-      [FEATURE_MODAL_FIELDS.benefit]:
-        typeof values[FEATURE_MODAL_FIELDS.benefit] === 'string' ? values[FEATURE_MODAL_FIELDS.benefit] : '',
       [FEATURE_MODAL_FIELDS.description]:
         typeof values[FEATURE_MODAL_FIELDS.description] === 'string' ? values[FEATURE_MODAL_FIELDS.description] : '',
       [FEATURE_MODAL_FIELDS.screenshot]: Array.isArray(values[FEATURE_MODAL_FIELDS.screenshot]) ? values[FEATURE_MODAL_FIELDS.screenshot] : []
@@ -146,7 +143,6 @@ export function getModalFieldValues(
   }
 
   return {
-    [BUG_MODAL_FIELDS.title]: typeof values[BUG_MODAL_FIELDS.title] === 'string' ? values[BUG_MODAL_FIELDS.title] : '',
     [BUG_MODAL_FIELDS.platform]: Array.isArray(values[BUG_MODAL_FIELDS.platform])
       ? (values[BUG_MODAL_FIELDS.platform] as string[])[0] ?? ''
       : '',
@@ -155,9 +151,6 @@ export function getModalFieldValues(
       : '',
     [BUG_MODAL_FIELDS.description]:
       typeof values[BUG_MODAL_FIELDS.description] === 'string' ? values[BUG_MODAL_FIELDS.description] : '',
-    [BUG_MODAL_FIELDS.steps]: typeof values[BUG_MODAL_FIELDS.steps] === 'string' ? values[BUG_MODAL_FIELDS.steps] : '',
-    [BUG_MODAL_FIELDS.expected]: typeof values[BUG_MODAL_FIELDS.expected] === 'string' ? values[BUG_MODAL_FIELDS.expected] : '',
-    [BUG_MODAL_FIELDS.actual]: typeof values[BUG_MODAL_FIELDS.actual] === 'string' ? values[BUG_MODAL_FIELDS.actual] : '',
     [BUG_MODAL_FIELDS.screenshot]: Array.isArray(values[BUG_MODAL_FIELDS.screenshot]) ? values[BUG_MODAL_FIELDS.screenshot] : []
   }
 }

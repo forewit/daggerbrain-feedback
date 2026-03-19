@@ -5,16 +5,13 @@ import {
   normalizeBugTitle,
   resolveCanonicalBugId
 } from '../db/bugs'
+import { deriveTitleFromDescription } from './derive-title'
 import type { BugPlatform, BugRecord, BugRelationshipType, BugSeverity } from '../types'
 
 interface CreateBugSubmissionInput {
-  title: string
   platform: BugPlatform | null
   severity: BugSeverity | null
   description: string
-  steps: string
-  expected: string
-  actual: string
   screenshot_url: string | null
 }
 
@@ -35,8 +32,12 @@ export async function createBugFromSubmission(
 
   const bugId = await createBug(db, {
     ...input,
+    title: deriveTitleFromDescription(input.description),
+    steps: '',
+    expected: '',
+    actual: '',
     reporter_id: userId,
-    title_normalized: normalizeBugTitle(input.title),
+    title_normalized: normalizeBugTitle(deriveTitleFromDescription(input.description)),
     status: options?.relationshipType === 'DUPLICATE_OF' ? 'DUPLICATE' : 'OPEN',
     related_bug_id: targetBug?.id ?? null,
     relationship_type: options?.relationshipType ?? null,

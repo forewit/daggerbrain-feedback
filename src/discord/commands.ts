@@ -11,44 +11,19 @@ export function buildApplicationCommands(manageMessagesPermission: string): REST
       options: [
         {
           type: ApplicationCommandOptionType.String,
-          name: 'title',
-          description: 'Short summary of the bug'
-        },
-        {
-          type: ApplicationCommandOptionType.String,
           name: 'description',
-          description: 'What happened?'
-        },
-        {
-          type: ApplicationCommandOptionType.String,
-          name: 'steps',
-          description: 'Steps to reproduce'
-        },
-        {
-          type: ApplicationCommandOptionType.String,
-          name: 'expected',
-          description: 'Expected behavior'
-        },
-        {
-          type: ApplicationCommandOptionType.String,
-          name: 'actual',
-          description: 'Actual behavior'
+          description: 'Describe the bug'
         }
       ]
     },
     {
-      name: 'feature',
-      description: 'Request a feature',
+      name: 'feedback',
+      description: 'Share product feedback',
       options: [
         {
           type: ApplicationCommandOptionType.String,
-          name: 'title',
-          description: 'Short summary of the feature'
-        },
-        {
-          type: ApplicationCommandOptionType.String,
           name: 'description',
-          description: 'What do you want?'
+          description: 'Describe the feedback'
         }
       ]
     },

@@ -1,4 +1,4 @@
-import type { FeatureRecord, FeatureStatus } from '../types'
+import type { FeatureRecord, FeatureStatus, FeatureSummary } from '../types'
 
 function toFeatureRecord(row: Record<string, unknown>): FeatureRecord {
   return {
@@ -14,6 +14,18 @@ function toFeatureRecord(row: Record<string, unknown>): FeatureRecord {
     message_id: row.message_id ? String(row.message_id) : null,
     created_at: String(row.created_at),
     updated_at: String(row.updated_at)
+  }
+}
+
+function toFeatureSummary(row: Record<string, unknown>): FeatureSummary {
+  return {
+    id: Number(row.id),
+    title: String(row.title),
+    description: String(row.description),
+    status: row.status as FeatureStatus,
+    votes_count: Number(row.votes_count),
+    screenshot_url: row.screenshot_url ? String(row.screenshot_url) : null,
+    created_at: String(row.created_at)
   }
 }
 
@@ -43,6 +55,29 @@ export async function getFeatureById(db: D1Database, featureId: number): Promise
     .first<Record<string, unknown>>()
 
   return row ? toFeatureRecord(row) : null
+}
+
+export async function listFeatures(
+  db: D1Database,
+  options?: { status?: 'active' | 'all'; sort?: 'top' | 'newest'; limit?: number }
+): Promise<FeatureSummary[]> {
+  const status = options?.status ?? 'active'
+  const sort = options?.sort ?? 'top'
+  const limit = options?.limit ?? 6
+  const where = status === 'active' ? `WHERE status IN ('OPEN', 'PLANNED')` : ''
+  const order = sort === 'top' ? 'ORDER BY votes_count DESC, created_at DESC' : 'ORDER BY created_at DESC'
+  const result = await db
+    .prepare(`
+      SELECT id, title, description, status, votes_count, screenshot_url, created_at
+      FROM features
+      ${where}
+      ${order}
+      LIMIT ?
+    `)
+    .bind(limit)
+    .all<Record<string, unknown>>()
+
+  return (result.results ?? []).map(toFeatureSummary)
 }
 
 export async function addFeatureVote(db: D1Database, featureId: number, userId: string): Promise<'added' | 'duplicate'> {

@@ -64,7 +64,7 @@ function getBugForumTagIds(channel: DiscordChannelRecord, bug: BugRecord): strin
 }
 
 function getFeatureForumTagIds(channel: DiscordChannelRecord, feature: FeatureRecord): string[] {
-  return pickForumTagIds(channel, ['feature', 'request', feature.status.toLowerCase()])
+  return pickForumTagIds(channel, ['feedback', 'feature', 'request', feature.status.toLowerCase()])
 }
 
 function isForumChannel(channelType: ChannelType): boolean {
@@ -181,13 +181,13 @@ export function logDiscordApiError(event: string, error: unknown, metadata?: Rec
 export function getCreateMessageFailureMessage(kind: 'bug' | 'feature', error: unknown): string {
   if (error instanceof DiscordApiError) {
     if (error.status === 403 && error.discordCode === 50001) {
-      return `${kind === 'bug' ? 'Bug' : 'Feature'} saved, but the bot cannot access the configured channel.`
+      return `${kind === 'bug' ? 'Bug' : 'Feedback'} saved, but the bot cannot access the configured channel.`
     }
 
     if (error.status === 403 && error.discordCode === 50013) {
-      return `${kind === 'bug' ? 'Bug' : 'Feature'} saved, but the bot is missing permission to post in the configured channel.`
+      return `${kind === 'bug' ? 'Bug' : 'Feedback'} saved, but the bot is missing permission to post in the configured channel.`
     }
   }
 
-  return `${kind === 'bug' ? 'Bug' : 'Feature'} saved, but posting to Discord failed.`
+  return `${kind === 'bug' ? 'Bug' : 'Feedback'} saved, but posting to Discord failed.`
 }

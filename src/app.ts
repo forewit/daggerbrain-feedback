@@ -10,9 +10,10 @@ import {
   normalizeBugTitle
 } from './db/bugs'
 import { setBugMessageMetadata } from './db/bugs'
-import { setFeatureMessageMetadata } from './db/features'
+import { listFeatures, setFeatureMessageMetadata } from './db/features'
 import { createBugFromSubmission } from './feedback/create-bug'
 import { createFeatureFromSubmission } from './feedback/create-feature'
+import { deriveTitleFromDescription } from './feedback/derive-title'
 import { linkBugAsDuplicate, linkBugAsRegression } from './feedback/link-duplicate'
 import { updateBugLifecycleStatus } from './feedback/update-status'
 import { upvoteBug, upvoteFeature } from './feedback/upvote'
@@ -56,10 +57,9 @@ import {
   syncFeatureMessage
 } from './discord/publisher'
 import { DiscordRestClient } from './discord/rest'
-import type { BugRelationshipType, BugStatus, Env } from './types'
+import type { BugRelationshipType, Env } from './types'
 import {
   bugLinkCommandSchema,
-  bugPreflightTitleSchema,
   bugStatusCommandSchema,
   bugSubmissionSchema,
   bugsQuerySchema,
@@ -88,37 +88,29 @@ function buildBugSubmissionMessage(
   return link ? `Bug #${options.bugId} is live: ${link}` : `Bug #${options.bugId} is live.`
 }
 
-function buildCreatedMessage(kind: 'Bug' | 'Feature', id: number, messageUrl: string | null, fallbackUrl?: string | null): string {
+function buildCreatedMessage(kind: string, id: number, messageUrl: string | null, fallbackUrl?: string | null): string {
   const url = messageUrl ?? fallbackUrl ?? null
   return url ? `${kind} #${id} is live: ${url}` : `${kind} #${id} is live.`
 }
 
 function getBugCommandDraft(interaction: APIApplicationCommandInteraction) {
   return {
-    title: getCommandOptionString(interaction, 'title')?.trim() ?? '',
     platform: null,
     severity: null,
     description: getCommandOptionString(interaction, 'description')?.trim() ?? '',
-    steps: getCommandOptionString(interaction, 'steps')?.trim() ?? '',
-    expected: getCommandOptionString(interaction, 'expected')?.trim() ?? '',
-    actual: getCommandOptionString(interaction, 'actual')?.trim() ?? '',
     screenshot_url: null
   }
 }
 
 function getFeatureCommandDraft(interaction: APIApplicationCommandInteraction) {
   return {
-    feature_title: getCommandOptionString(interaction, 'title')?.trim() ?? '',
-    feature_benefit: '',
-    feature_description: getCommandOptionString(interaction, 'description')?.trim() ?? '',
+    description: getCommandOptionString(interaction, 'description')?.trim() ?? '',
     screenshot_url: null
   }
 }
 
 async function createFeatureSubmissionResponse(env: Env, client: DiscordRestClient, userId: string, input: {
-  feature_title: string
-  feature_benefit: string
-  feature_description: string
+  description: string
   screenshot_url: string | null
 }): Promise<APIInteractionResponse> {
   const result = await createFeatureFromSubmission(env.DB, userId, input)
@@ -129,7 +121,7 @@ async function createFeatureSubmissionResponse(env: Env, client: DiscordRestClie
   try {
     const message = await createFeatureReportMessage(env, client, result.feature)
     await setFeatureMessageMetadata(env.DB, result.feature.id, message.channel_id, message.id)
-    return ephemeralMessage(buildCreatedMessage('Feature', result.feature.id, buildDiscordMessageUrl(env, message.channel_id, message.id)))
+    return ephemeralMessage(buildCreatedMessage('Feedback', result.feature.id, buildDiscordMessageUrl(env, message.channel_id, message.id)))
   } catch (error) {
     logDiscordApiError('discord.create_feature_message_failed', error, { featureId: result.feature.id })
     return ephemeralMessage(getCreateMessageFailureMessage('feature', error))
@@ -141,13 +133,9 @@ async function createBugSubmissionResponse(
   client: DiscordRestClient,
   userId: string,
   input: {
-    title: string
     platform: 'WEB' | 'IOS' | 'ANDROID' | 'DESKTOP' | 'OTHER' | null
     severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | null
     description: string
-    steps: string
-    expected: string
-    actual: string
     screenshot_url: string | null
   },
   options?: { relationshipType?: BugRelationshipType | null; targetBugId?: number | null }
@@ -196,10 +184,9 @@ async function handleBugCommand(env: Env, client: DiscordRestClient, interaction
   }
 
   const draft = getBugCommandDraft(interaction)
-  const trimmedTitle = draft.title
-  const hasInlineDetails = Boolean(draft.description || draft.steps || draft.expected || draft.actual)
+  const trimmedDescription = draft.description.trim()
 
-  if (!trimmedTitle) {
+  if (!trimmedDescription) {
     const sessionId = interaction.id
     await createBugPreflightSession(env.DB, {
       sessionId,
@@ -210,45 +197,33 @@ async function handleBugCommand(env: Env, client: DiscordRestClient, interaction
 
     return bugModalResponse({
       sessionId,
-      initialTitle: '',
+      initialDescription: '',
       relationshipType: null,
       targetBugId: null
     })
   }
 
-  const parsed = bugPreflightTitleSchema.safeParse(trimmedTitle)
-  if (!parsed.success) {
-    return ephemeralMessage('Please provide a short bug title with at least 3 characters.')
-  }
+  const derivedTitle = deriveTitleFromDescription(trimmedDescription)
 
   const sessionId = interaction.id
   await createBugPreflightSession(env.DB, {
     sessionId,
     userId,
-    title: parsed.data,
-    titleNormalized: normalizeBugTitle(parsed.data)
+    title: trimmedDescription,
+    titleNormalized: normalizeBugTitle(derivedTitle)
   })
 
-  if (hasInlineDetails) {
-    const submission = bugSubmissionSchema.safeParse(draft)
-    if (!submission.success) {
-      return ephemeralMessage('Bug submission validation failed. Please make the title clear and keep the fields concise.')
-    }
+  const submission = bugSubmissionSchema.safeParse(draft)
+  if (!submission.success) {
+    return ephemeralMessage('Bug submission validation failed. Please add a description and keep it concise.')
+  }
 
+  const matches = await findSimilarBugs(env.DB, derivedTitle)
+  if (matches.duplicates.length === 0 && matches.regressions.length === 0) {
     return createBugSubmissionResponse(env, client, userId, submission.data)
   }
 
-  const matches = await findSimilarBugs(env.DB, parsed.data)
-  if (matches.duplicates.length === 0 && matches.regressions.length === 0) {
-    return bugModalResponse({
-      sessionId,
-      initialTitle: parsed.data,
-      relationshipType: null,
-      targetBugId: null
-    })
-  }
-
-  return bugPreflightResponse(sessionId, parsed.data, matches.duplicates, matches.regressions)
+  return bugPreflightResponse(sessionId, derivedTitle, matches.duplicates, matches.regressions)
 }
 
 async function handleBugStatusCommand(env: Env, client: DiscordRestClient, interaction: APIApplicationCommandInteraction): Promise<APIInteractionResponse> {
@@ -325,17 +300,17 @@ async function handleCommand(env: Env, client: DiscordRestClient, interaction: A
     return handleBugCommand(env, client, interaction)
   }
 
-  if (commandName === 'feature') {
+  if (commandName === 'feedback' || commandName === 'feature') {
     const userId = getInteractionUserId(interaction)
     if (!userId) {
       return ephemeralMessage('Unable to determine the reporting user.')
     }
 
     const draft = getFeatureCommandDraft(interaction)
-    if (draft.feature_title) {
+    if (draft.description) {
       const parsed = featureSubmissionSchema.safeParse(draft)
       if (!parsed.success) {
-        return ephemeralMessage('Feature request validation failed.')
+        return ephemeralMessage('Feedback validation failed.')
       }
 
       return createFeatureSubmissionResponse(env, client, userId, parsed.data)
@@ -367,7 +342,7 @@ async function handleModalSubmit(env: Env, client: DiscordRestClient, interactio
     })
 
     if (!parsed.success) {
-      return ephemeralMessage('Feature request validation failed.')
+      return ephemeralMessage('Feedback validation failed.')
     }
 
     const userId = getInteractionUserId(interaction)
@@ -394,8 +369,8 @@ async function handleModalSubmit(env: Env, client: DiscordRestClient, interactio
   }
 
   const modalValues = getModalFieldValues(interaction)
-  if (typeof modalValues.title === 'string' && !modalValues.title.trim() && preflightSession?.title) {
-    modalValues.title = preflightSession.title
+  if (typeof modalValues.description === 'string' && !modalValues.description.trim() && preflightSession?.title) {
+    modalValues.description = preflightSession.title
   }
 
   const parsed = bugSubmissionSchema.safeParse({
@@ -406,7 +381,7 @@ async function handleModalSubmit(env: Env, client: DiscordRestClient, interactio
   })
 
   if (!parsed.success) {
-    return ephemeralMessage('Bug submission validation failed. Please make the title clear and keep the fields concise.')
+    return ephemeralMessage('Bug submission validation failed. Please add a description and keep it concise.')
   }
 
   return createBugSubmissionResponse(env, client, userId, parsed.data, {
@@ -430,7 +405,7 @@ async function handleComponent(env: Env, client: DiscordRestClient, interaction:
 
     return bugModalResponse({
       sessionId: session.session_id,
-      initialTitle: session.title,
+      initialDescription: session.title,
       relationshipType: preflightAction.relationshipType,
       targetBugId: preflightAction.targetBugId
     })
@@ -515,31 +490,7 @@ async function handleComponent(env: Env, client: DiscordRestClient, interaction:
     return duplicateSelectionResponse(bug, matches.duplicates)
   }
 
-  const authorized = bug.reporter_id === userId || isModerator(interaction, env)
-  if (!authorized) {
-    console.error('discord.fixed_unauthorized', { bugId: bug.id, userId })
-    return ephemeralMessage('You cannot close this bug.')
-  }
-
-  if (bug.status === 'FIXED') {
-    return ephemeralMessage('This bug is already marked fixed.')
-  }
-
-  if (bug.status === 'CLOSED' || bug.status === 'DUPLICATE') {
-    return ephemeralMessage('This bug is already closed.')
-  }
-
-  const result = await updateBugLifecycleStatus(env.DB, bug.id, 'FIXED' satisfies BugStatus)
-  if (!result.ok) {
-    return ephemeralMessage(result.message)
-  }
-
-  await syncBugMessage(env, client, result.bugId)
-  if (result.previousStatus !== result.nextStatus) {
-    console.info('bug.status_changed', { bugId: result.bugId, previousStatus: result.previousStatus, nextStatus: result.nextStatus })
-  }
-
-  return silentComponentAck()
+  return ephemeralMessage('Mark bugs as fixed from the admin workflow instead.')
 }
 
 export function createApp() {
@@ -571,8 +522,21 @@ export function createApp() {
       status: c.req.query('status') ?? 'open',
       sort: c.req.query('sort') ?? 'top'
     })
-    const bugs = await listBugs(c.env.DB, query.status, query.sort)
-    return c.html(renderDashboardPage(bugs, query.status, query.sort))
+    const [bugs, allBugs, features] = await Promise.all([
+      listBugs(c.env.DB, query.status, query.sort),
+      listBugs(c.env.DB, 'all', 'newest'),
+      listFeatures(c.env.DB, { status: 'all', sort: 'top', limit: 5 })
+    ])
+
+    return c.html(
+      renderDashboardPage({
+        bugs,
+        allBugs,
+        features,
+        currentStatus: query.status,
+        currentSort: query.sort
+      })
+    )
   })
 
   app.post('/interactions', async (c) => {

@@ -30,27 +30,27 @@ type DiscordMessagePayload = RESTPostAPIChannelMessageJSONBody | RESTPatchAPICha
 
 const EMOJI = {
   bug: '\u{1F41E}',
-  feature: '\u2728',
-  open: '\u{1F7E2}',
+  feedback: '\u2728',
+  open: '\u{1F534}',
   progress: '\u{1F6E0}\uFE0F',
   fixed: '\u2705',
   closed: '\u26AA',
   duplicate: '\u{1F501}',
-  votes: '\u2B06\uFE0F',
+  upvotes: '\u2B06\uFE0F',
   reporter: '\u{1F464}',
   regression: '\u21A9\uFE0F'
 } as const
 
 const bugStatusMeta = {
-  OPEN: { label: 'Open', emoji: EMOJI.open, color: 0x2ecc71 },
+  OPEN: { label: 'Open', emoji: EMOJI.open, color: 0xe74c3c },
   IN_PROGRESS: { label: 'In Progress', emoji: EMOJI.progress, color: 0xf39c12 },
   FIXED: { label: 'Fixed', emoji: EMOJI.fixed, color: 0x27ae60 },
   CLOSED: { label: 'Closed', emoji: EMOJI.closed, color: 0x5d6d7e },
   DUPLICATE: { label: 'Duplicate', emoji: EMOJI.duplicate, color: 0x7f8c8d }
 } as const
 
-const featureStatusMeta = {
-  OPEN: { label: 'Open', emoji: EMOJI.open, color: 0xf1c40f },
+const feedbackStatusMeta = {
+  OPEN: { label: 'Open', emoji: '\u{1F7E2}', color: 0xf1c40f },
   PLANNED: { label: 'Planned', emoji: '\u{1F5FA}\uFE0F', color: 0x3498db },
   SHIPPED: { label: 'Shipped', emoji: '\u{1F680}', color: 0x2ecc71 },
   CLOSED: { label: 'Closed', emoji: EMOJI.closed, color: 0x5d6d7e }
@@ -102,24 +102,6 @@ function modalLabel(label: string, component: APILabelComponent['component'], de
     ...(description ? { description } : {}),
     component
   }
-}
-
-function shortTextInput(
-  customId: string,
-  label: string,
-  options?: { required?: boolean; placeholder?: string; value?: string; maxLength?: number; description?: string }
-): APILabelComponent {
-  const component: APITextInputComponent = {
-    type: ComponentType.TextInput,
-    custom_id: customId,
-    style: TextInputStyle.Short,
-    required: options?.required ?? true,
-    ...(options?.placeholder ? { placeholder: options.placeholder } : {}),
-    ...(options?.value ? { value: options.value } : {}),
-    ...(options?.maxLength ? { max_length: options.maxLength } : {})
-  }
-
-  return modalLabel(label, component, options?.description)
 }
 
 function paragraphTextInput(
@@ -219,17 +201,11 @@ export function silentComponentAck(): APIInteractionResponseDeferredMessageUpdat
 
 export function bugModalResponse(options: {
   sessionId: string
-  initialTitle: string
+  initialDescription: string
   relationshipType: BugRelationshipType | null
   targetBugId: number | null
 }): APIModalInteractionResponse {
   const components: APIModalInteractionResponseCallbackComponent[] = [
-    shortTextInput(BUG_MODAL_FIELDS.title, 'What broke?', {
-      value: options.initialTitle,
-      placeholder: 'Settings crashes when I open notifications',
-      maxLength: 100,
-      description: 'Keep it short and searchable.'
-    }),
     stringSelect(
       BUG_MODAL_FIELDS.platform,
       'Where did you hit it?',
@@ -256,20 +232,10 @@ export function bugModalResponse(options: {
       'Pick a severity'
     ),
     fileUpload(BUG_MODAL_FIELDS.screenshot, 'Screenshot', 'Optional. A quick visual goes a long way.'),
-    paragraphTextInput(BUG_MODAL_FIELDS.description, 'What happened?', {
-      placeholder: 'A concise summary of the problem.',
-      maxLength: 1000
-    }),
-    paragraphTextInput(BUG_MODAL_FIELDS.steps, 'How can we repro it?', {
-      placeholder: '1. Open Settings\n2. Click Notifications\n3. The app freezes',
-      maxLength: 1000
-    }),
-    paragraphTextInput(BUG_MODAL_FIELDS.expected, 'What should have happened?', {
-      placeholder: 'Notifications should open normally.',
-      maxLength: 1000
-    }),
-    paragraphTextInput(BUG_MODAL_FIELDS.actual, 'What happened instead?', {
-      placeholder: 'The screen locks up and never recovers.',
+    paragraphTextInput(BUG_MODAL_FIELDS.description, 'Description', {
+      value: options.initialDescription,
+      placeholder: 'Describe the bug and any context that would help us understand it.',
+      required: true,
       maxLength: 1000
     })
   ]
@@ -284,22 +250,13 @@ export function bugModalResponse(options: {
   }
 }
 
-export function featureModalResponse(initialTitle = ''): APIModalInteractionResponse {
+export function featureModalResponse(initialDescription = ''): APIModalInteractionResponse {
   const components: APIModalInteractionResponseCallbackComponent[] = [
-    shortTextInput(FEATURE_MODAL_FIELDS.title, 'What should we build?', {
-      value: initialTitle,
-      placeholder: 'Add a search bar to the dashboard',
-      maxLength: 100,
-      description: 'Short, punchy, and easy to scan.'
-    }),
-    paragraphTextInput(FEATURE_MODAL_FIELDS.benefit, 'Why would this help?', {
-      placeholder: 'It would help people find old bugs and requests faster.',
-      maxLength: 300,
-      description: 'A sentence or two is perfect.'
-    }),
     fileUpload(FEATURE_MODAL_FIELDS.screenshot, 'Mockup or screenshot', 'Optional. Sketches and references are great.'),
-    paragraphTextInput(FEATURE_MODAL_FIELDS.description, 'Describe the idea', {
-      placeholder: 'Share the details, edge cases, or rough behavior you have in mind.',
+    paragraphTextInput(FEATURE_MODAL_FIELDS.description, 'Description', {
+      value: initialDescription,
+      placeholder: 'Describe the feedback or idea you want to share.',
+      required: true,
       maxLength: 1000
     })
   ]
@@ -308,7 +265,7 @@ export function featureModalResponse(initialTitle = ''): APIModalInteractionResp
     type: InteractionResponseType.Modal,
     data: {
       custom_id: CUSTOM_IDS.featureModal,
-      title: 'Feature request',
+      title: 'Share feedback',
       components
     }
   }
@@ -320,7 +277,7 @@ export function bugPreflightResponse(
   duplicates: BugPreflightMatch[],
   regressions: BugPreflightMatch[]
 ): APIInteractionResponseChannelMessageWithSource {
-  const lines = [`${EMOJI.feature} Close matches for "${title}"`]
+  const lines = [`${EMOJI.feedback} Close matches for "${title}"`]
 
   if (duplicates.length > 0) {
     lines.push('', 'Open bugs:')
@@ -366,7 +323,7 @@ export function topBugsResponse(bugs: BugSummary[]): APIInteractionResponse {
 
   const content = bugs
     .slice(0, 5)
-    .map((bug, index) => `${index + 1}. ${EMOJI.bug} #${bug.id} · ${bug.votes_count} votes · ${bug.title}`)
+    .map((bug, index) => `${index + 1}. ${EMOJI.bug} #${bug.id} - ${bug.votes_count} upvotes - ${bug.title}`)
     .join('\n')
 
   return ephemeralMessage(content)
@@ -374,17 +331,16 @@ export function topBugsResponse(bugs: BugSummary[]): APIInteractionResponse {
 
 function buildBugActionRow(bug: BugRecord, bugUrl: string | null, relatedBugUrl: string | null): ButtonRow {
   const isClosed = bug.status === 'FIXED' || bug.status === 'CLOSED' || bug.status === 'DUPLICATE'
-  const buttons: MessageButton[] = [
-    button(`${CUSTOM_IDS.upvotePrefix}${bug.id}`, 'Upvote', ButtonStyle.Primary, isClosed)
-  ]
+  const buttons: MessageButton[] = [button(`${CUSTOM_IDS.upvotePrefix}${bug.id}`, 'Upvote', ButtonStyle.Primary, isClosed)]
 
   const openUrl = bug.status === 'DUPLICATE' ? relatedBugUrl : bugUrl
   if (openUrl) {
     buttons.push(linkButton(bug.status === 'DUPLICATE' ? 'Open Original' : 'Open Card', openUrl))
   }
 
-  buttons.push(button(`${CUSTOM_IDS.duplicatePrefix}${bug.id}`, 'Duplicate', ButtonStyle.Secondary, bug.status === 'DUPLICATE'))
-  buttons.push(button(`${CUSTOM_IDS.fixedPrefix}${bug.id}`, 'Fixed', ButtonStyle.Success, isClosed))
+  buttons.push(
+    button(`${CUSTOM_IDS.duplicatePrefix}${bug.id}`, 'Mark as Duplicate', ButtonStyle.Secondary, isClosed)
+  )
 
   return {
     type: ComponentType.ActionRow,
@@ -414,14 +370,8 @@ function bugDescription(bug: BugRecord, relatedBugUrl: string | null, relatedBug
 
   const lines: string[] = []
   const description = compactValue(bug.description)
-  const steps = compactValue(bug.steps)
-  const expected = compactValue(bug.expected)
-  const actual = compactValue(bug.actual)
 
   if (description) lines.push(truncate(description, 900))
-  if (steps) lines.push(`**Repro**\n${truncate(steps, 800)}`)
-  if (expected) lines.push(`**Expected**\n${truncate(expected, 500)}`)
-  if (actual) lines.push(`**Actual**\n${truncate(actual, 500)}`)
   if (bug.relationship_type === 'REGRESSION_OF' && relatedBugUrl && relatedBugTitle) {
     lines.push(`**Regression of**\n[bug #${bug.related_bug_id} ${relatedBugTitle}](${relatedBugUrl})`)
   }
@@ -429,15 +379,9 @@ function bugDescription(bug: BugRecord, relatedBugUrl: string | null, relatedBug
   return lines.join('\n\n')
 }
 
-function featureDescription(feature: FeatureRecord): string {
-  const lines: string[] = []
-  const benefit = compactValue(feature.benefit)
+function feedbackDescription(feature: FeatureRecord): string {
   const description = compactValue(feature.description)
-
-  if (benefit) lines.push(`**Why it helps**\n${truncate(benefit, 280)}`)
-  if (description) lines.push(`**Idea**\n${truncate(description, 900)}`)
-
-  return lines.join('\n\n')
+  return description ? truncate(description, 900) : ''
 }
 
 export function renderBugMessage(
@@ -458,7 +402,7 @@ export function renderLegacyBugMessage(
   const status = bugStatusMeta[bug.status]
   const fields: NonNullable<APIEmbed['fields']> = [
     { name: 'Status', value: `${status.emoji} ${status.label}`, inline: true },
-    { name: 'Votes', value: `${EMOJI.votes} ${bug.votes_count}`, inline: true },
+    { name: 'Upvotes', value: `${EMOJI.upvotes} ${bug.votes_count}`, inline: true },
     { name: 'Reporter', value: `${EMOJI.reporter} <@${bug.reporter_id}>`, inline: true }
   ]
 
@@ -469,7 +413,7 @@ export function renderLegacyBugMessage(
 
   const description = bugDescription(bug, options?.relatedBugUrl ?? null, options?.relatedBug?.title ?? null)
   const embed: APIEmbed = {
-    title: `${EMOJI.bug} Bug #${bug.id} · ${truncate(bug.title, 240)}`,
+    title: `${EMOJI.bug} Bug #${bug.id} - ${truncate(bug.title, 240)}`,
     description: description || displayValue(bug.description, 'Concise bug card, details coming soon.'),
     color: status.color,
     fields,
@@ -494,25 +438,21 @@ export function renderLegacyFeatureMessage(
   feature: FeatureRecord,
   options?: { featureUrl?: string | null }
 ): RESTPostAPIChannelMessageJSONBody {
-  const status = featureStatusMeta[feature.status]
-  const description = featureDescription(feature)
+  const status = feedbackStatusMeta[feature.status]
+  const description = feedbackDescription(feature)
   const fields: NonNullable<APIEmbed['fields']> = [
     { name: 'Status', value: `${status.emoji} ${status.label}`, inline: true },
-    { name: 'Votes', value: `${EMOJI.votes} ${feature.votes_count}`, inline: true },
+    { name: 'Upvotes', value: `${EMOJI.upvotes} ${feature.votes_count}`, inline: true },
     { name: 'Reporter', value: `${EMOJI.reporter} <@${feature.reporter_id}>`, inline: true }
   ]
 
-  if (compactValue(feature.benefit)) {
-    fields.push({ name: 'Why it helps', value: truncate(feature.benefit, 300) })
-  }
-
   const embed: APIEmbed = {
-    title: `${EMOJI.feature} Feature #${feature.id} · ${truncate(feature.title, 240)}`,
-    description: description || displayValue(feature.description, 'A short, useful request card.'),
+    title: `${EMOJI.feedback} Feedback #${feature.id} - ${truncate(feature.title, 240)}`,
+    description: description || displayValue(feature.description, 'A short feedback card.'),
     color: status.color,
     fields,
     footer: {
-      text: 'Feature request'
+      text: 'Feedback'
     },
     timestamp: feature.updated_at
   }

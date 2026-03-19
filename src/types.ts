@@ -106,3 +106,13 @@ export interface FeatureRecord {
   created_at: string
   updated_at: string
 }
+
+export interface FeatureSummary {
+  id: number
+  title: string
+  description: string
+  status: FeatureStatus
+  votes_count: number
+  screenshot_url: string | null
+  created_at: string
+}

@@ -91,44 +91,19 @@ export async function registerCommands(env: Env): Promise<void> {
       options: [
         {
           type: 3,
-          name: 'title',
-          description: 'Short summary of the bug'
-        },
-        {
-          type: 3,
           name: 'description',
-          description: 'What happened?'
-        },
-        {
-          type: 3,
-          name: 'steps',
-          description: 'Steps to reproduce'
-        },
-        {
-          type: 3,
-          name: 'expected',
-          description: 'Expected behavior'
-        },
-        {
-          type: 3,
-          name: 'actual',
-          description: 'Actual behavior'
+          description: 'Describe the bug'
         }
       ]
     },
     {
-      name: 'feature',
-      description: 'Request a feature',
+      name: 'feedback',
+      description: 'Share product feedback',
       options: [
         {
           type: 3,
-          name: 'title',
-          description: 'Short summary of the feature'
-        },
-        {
-          type: 3,
           name: 'description',
-          description: 'What do you want?'
+          description: 'Describe the feedback'
         }
       ]
     },

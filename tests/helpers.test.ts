@@ -28,6 +28,7 @@ import {
 import { DiscordApiError, DiscordRestClient } from '../src/discord/rest'
 import { normalizeBugTitle } from '../src/db/bugs'
 import { bugSubmissionSchema } from '../src/validation'
+import { renderDashboardPage } from '../src/ui/dashboard'
 
 function toHex(bytes: Uint8Array): string {
   return Array.from(bytes).map((byte) => byte.toString(16).padStart(2, '0')).join('')
@@ -50,7 +51,6 @@ describe('custom id helpers', () => {
   it('parses known action custom ids', () => {
     expect(parseBugAction('upvote:12')).toEqual({ action: 'upvote', bugId: 12 })
     expect(parseBugAction('duplicate:7')).toEqual({ action: 'duplicate', bugId: 7 })
-    expect(parseBugAction('fixed:3')).toEqual({ action: 'fixed', bugId: 3 })
     expect(parseFeatureUpvote('feature:upvote:12')).toEqual({ featureId: 12 })
   })
 
@@ -103,10 +103,10 @@ describe('command helpers', () => {
             id: 'cmd',
             name: 'bug',
             type: 1,
-            options: [{ name: 'title', type: 3, value: 'Crash on login' }]
+            options: [{ name: 'description', type: 3, value: 'Crash on login' }]
           }
         } as never,
-        'title'
+        'description'
       )
     ).toBe('Crash on login')
 
@@ -138,7 +138,7 @@ describe('command helpers', () => {
 
   it('builds the full slash command set with typed shapes', () => {
     const commands = buildApplicationCommands(String(1n << 13n))
-    expect(commands.map((command) => command.name)).toEqual(['bug', 'feature', 'topbugs', 'bug-status', 'bug-link'])
+    expect(commands.map((command) => command.name)).toEqual(['bug', 'feedback', 'topbugs', 'bug-status', 'bug-link'])
     expect(commands.find((command) => command.name === 'bug-status')?.default_member_permissions).toBe(String(1n << 13n))
   })
 })
@@ -147,7 +147,7 @@ describe('modal builders and parsers', () => {
   it('builds typed modals for bug and feature flows', () => {
     const bugModal = bugModalResponse({
       sessionId: 'session-1',
-      initialTitle: 'Crash on login',
+      initialDescription: 'Crash on login',
       relationshipType: null,
       targetBugId: null
     })
@@ -178,22 +178,12 @@ describe('modal builders and parsers', () => {
         components: [
           {
             type: ComponentType.Label,
-            label: 'What should we build?',
-            component: { type: ComponentType.TextInput, custom_id: 'feature_title', value: 'Search bar' }
-          },
-          {
-            type: ComponentType.Label,
-            label: 'Why would this help?',
-            component: { type: ComponentType.TextInput, custom_id: 'feature_benefit', value: 'People can find bugs faster.' }
-          },
-          {
-            type: ComponentType.Label,
             label: 'Mockup or screenshot',
             component: { type: ComponentType.FileUpload, custom_id: 'feature_screenshot', values: ['file1'] }
           },
           {
             type: ComponentType.Label,
-            label: 'Describe the idea',
+            label: 'Description',
             component: { type: ComponentType.TextInput, custom_id: 'feature_description', value: 'A quick filter for the dashboard.' }
           }
         ]
@@ -201,8 +191,6 @@ describe('modal builders and parsers', () => {
     } as never
 
     expect(getModalFieldValues(interaction, 'feature')).toEqual({
-      feature_title: 'Search bar',
-      feature_benefit: 'People can find bugs faster.',
       feature_description: 'A quick filter for the dashboard.',
       feature_screenshot: ['file1']
     })
@@ -254,7 +242,8 @@ describe('public message builders', () => {
     expect(buttons[0]?.label).toBe('Upvote')
     expect(buttons[0]?.disabled).toBe(true)
     expect(buttons[1]?.url).toBe('https://example.com/dashboard#bug-1')
-    expect(buttons[3]?.disabled).toBe(true)
+    expect(buttons[2]?.label).toBe('Mark as Duplicate')
+    expect(buttons[2]?.disabled).toBe(true)
   })
 
   it('renders a concise feature card', () => {
@@ -263,7 +252,7 @@ describe('public message builders', () => {
         id: 3,
         title: 'Search bar',
         description: 'Add search to the dashboard',
-        benefit: 'People can find things faster.',
+        benefit: '',
         screenshot_url: 'https://example.com/mock.png',
         status: 'OPEN',
         reporter_id: '123',
@@ -277,6 +266,7 @@ describe('public message builders', () => {
     )
 
     expect(rendered.embeds?.[0]?.color).toBe(0xf1c40f)
+    expect(rendered.embeds?.[0]?.title).toContain('Feedback #3')
     expect(rendered.embeds?.[0]?.image?.url).toBe('https://example.com/mock.png')
     const buttons = (rendered.components?.[0] as { components: Array<{ disabled?: boolean; url?: string }> }).components
     expect(buttons[0]?.disabled).not.toBe(true)
@@ -287,13 +277,9 @@ describe('public message builders', () => {
 describe('schemas and normalization', () => {
   it('accepts concise bug submissions with optional metadata', () => {
     const parsed = bugSubmissionSchema.safeParse({
-      title: 'test',
       platform: null,
       severity: null,
-      description: '',
-      steps: '',
-      expected: '',
-      actual: '',
+      description: 'test',
       screenshot_url: null
     })
 
@@ -302,6 +288,78 @@ describe('schemas and normalization', () => {
 
   it('normalizes punctuation and spacing in bug titles', () => {
     expect(normalizeBugTitle('  Crash! On login???  ')).toBe('crash on login')
+  })
+})
+
+describe('dashboard renderer', () => {
+  it('renders the compact dashboard with bug and feature sections', () => {
+    const html = renderDashboardPage({
+      currentStatus: 'open',
+      currentSort: 'top',
+      bugs: [
+        {
+          id: 7,
+          title: 'App freezes after reconnect',
+          status: 'OPEN',
+          votes_count: 9,
+          duplicate_flags_count: 2,
+          linked_duplicates_count: 3,
+          regressions_count: 1,
+          related_bug_id: null,
+          relationship_type: null,
+          closed_reason: null,
+          status_note: null,
+          created_at: '2026-03-18 15:00:00'
+        }
+      ],
+      allBugs: [
+        {
+          id: 7,
+          title: 'App freezes after reconnect',
+          status: 'OPEN',
+          votes_count: 9,
+          duplicate_flags_count: 2,
+          linked_duplicates_count: 3,
+          regressions_count: 1,
+          related_bug_id: null,
+          relationship_type: null,
+          closed_reason: null,
+          status_note: null,
+          created_at: '2026-03-18 15:00:00'
+        },
+        {
+          id: 8,
+          title: 'Toolbar flickers on hover',
+          status: 'FIXED',
+          votes_count: 3,
+          duplicate_flags_count: 0,
+          linked_duplicates_count: 0,
+          regressions_count: 0,
+          related_bug_id: null,
+          relationship_type: null,
+          closed_reason: 'RESOLVED',
+          status_note: null,
+          created_at: '2026-03-17 10:00:00'
+        }
+      ],
+      features: [
+        {
+          id: 11,
+          title: 'Saved dashboard filters',
+          description: 'Remember the last dashboard view for returning moderators.',
+          status: 'PLANNED',
+          votes_count: 5,
+          screenshot_url: null,
+          created_at: '2026-03-16 09:00:00'
+        }
+      ]
+    })
+
+    expect(html).toContain('Compact signal for bugs, feedback, and triage momentum.')
+    expect(html).toContain('Slash command flows')
+    expect(html).toContain('Feature radar')
+    expect(html).toContain('Saved dashboard filters')
+    expect(html).toContain('Search issues')
   })
 })
 
