@@ -8,5 +8,9 @@ database_name = "daggerbrain_feedback"
 database_id = "1f02c7f2-dc5a-40f7-80c7-fea59f004b49"
 migrations_dir = "migrations"
 
-[vars]
-DISCORD_MOD_ROLE_IDS = ""
+[observability]
+enabled = true
+
+[observability.logs]
+invocation_logs = true
+head_sampling_rate = 1

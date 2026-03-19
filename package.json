@@ -5,12 +5,13 @@
   "description": "Discord bug bot built on Cloudflare Workers, Hono, and D1.",
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "dev": "NODE_TLS_REJECT_UNAUTHORIZED=0 wrangler dev",
+    "deploy": "NODE_TLS_REJECT_UNAUTHORIZED=0 wrangler deploy",
+    "postdeploy": "NODE_TLS_REJECT_UNAUTHORIZED=0 node --env-file=.env scripts/register-commands.mjs",
     "cf-typegen": "wrangler types",
     "db:migrate:local": "wrangler d1 migrations apply daggerbrain_feedback --local",
     "db:migrate:remote": "wrangler d1 migrations apply daggerbrain_feedback --remote",
-    "register-commands": "wrangler deploy --dry-run",
+    "register-commands": "node --env-file=.env scripts/register-commands.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
@@ -22,6 +23,8 @@
   ],
   "license": "ISC",
   "dependencies": {
+    "discord-api-types": "^0.38.31",
+    "discord-interactions": "^4.4.0",
     "hono": "^4.12.8",
     "tweetnacl": "^1.0.3",
     "zod": "^4.3.6"

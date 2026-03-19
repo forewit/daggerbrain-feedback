@@ -23,10 +23,15 @@ npx wrangler secret put DISCORD_PUBLIC_KEY
 npx wrangler secret put DISCORD_APPLICATION_ID
 npx wrangler secret put DISCORD_TOKEN
 npx wrangler secret put BUG_REPORT_CHANNEL_ID
+npx wrangler secret put FEATURE_CHANNEL_ID
 ```
 Optional non-secret variable in `wrangler.toml`:
 - `DISCORD_MOD_ROLE_IDS`: comma-separated Discord role IDs allowed to mark bugs fixed.
 - `DISCORD_DEV_GUILD_ID`: use a single guild ID during development to register slash commands faster.
+- `PUBLIC_APP_URL`: base URL for dashboard deep links and automatic slash-command registration after deploy.
+
+Optional local `.env` value for deployment automation:
+- `COMMANDS_REGISTER_URL`: override the URL used by `npm run register-commands` / post-deploy registration. If omitted, the script falls back to `PUBLIC_APP_URL`.
 
 ## 4. Apply database migrations
 Local:
@@ -39,10 +44,18 @@ npm run db:migrate:remote
 ```
 
 ## 5. Register Discord commands
-Either call the internal route after deploy or add a one-off admin workflow:
+Slash commands are now re-registered automatically after `npm run deploy`.
+
+If you need to force a refresh manually:
 ```bash
-curl -X POST https://<your-worker-domain>/commands/register
+npm run register-commands
 ```
+
+This calls:
+```text
+POST <COMMANDS_REGISTER_URL or PUBLIC_APP_URL>/commands/register
+```
+
 In development, if `DISCORD_DEV_GUILD_ID` is set, commands are registered to that guild. Otherwise, they are registered globally.
 
 ## 6. Deploy the Worker
@@ -55,15 +68,26 @@ In the Discord Developer Portal, set the Interactions Endpoint URL to:
 ```text
 https://<your-worker-domain>/interactions
 ```
-Ensure the bot is invited with permissions needed to post and edit messages in the configured report channel.
+Ensure the application is installed in the server with both the `bot` and `applications.commands` scopes. Slash commands can work without the bot user being able to post, so confirm the bot actually appears in the server member list.
+
+Ensure the bot can access the configured bug and feature report channels:
+- `View Channel`
+- `Send Messages`
+- `Embed Links`
+- If the channel is private, explicitly allow the bot role or the bot user.
+
+If `BUG_REPORT_CHANNEL_ID` points to a forum or media channel, the bot must also be able to create posts there. The Worker now uses the forum/media thread-creation endpoint for those channel types.
+If `FEATURE_CHANNEL_ID` points to a forum or media channel, the same applies to feature request posts.
 
 ## 8. Validate the application
 - Open `/dashboard` to inspect the HTML dashboard.
 - Call `/api/bugs` to confirm JSON output.
-- Run `/bug` in Discord to submit a modal-driven report.
+- Run `/bug title:<summary>` in Discord to exercise duplicate preflight and the modal flow.
+- Try `/bug-status` and `/bug-link` as a moderator to verify lifecycle changes and linking behavior.
 - Run `/topbugs` in Discord to confirm ranking output.
 
 ## Operational notes
 - Invalid signatures, failed Discord REST calls, authorization denials, and unhandled application errors are logged with structured event names.
-- Closed bugs remain visible and cannot receive additional upvotes.
-- Duplicate flags are informational in v1 and do not auto-link or auto-close reports.
+- `OPEN` and `IN_PROGRESS` bugs can receive votes; `FIXED` and `CLOSED` bugs stay visible for history.
+- Duplicate self-linking closes the child report, records it in D1, and adds the reporter's vote to the canonical bug.
+- Status changes attempt to DM the reporter, voters, and duplicate reporters, but DM failures are logged and do not fail the interaction.
