@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { InteractionResponseType, type APIApplicationCommandAutocompleteInteraction, type APIApplicationCommandInteraction, type APIInteractionResponse, type APIMessageComponentInteraction, type APIModalSubmitInteraction } from 'discord-api-types/v10'
-import { BUG_MODAL_FIELDS, FEATURE_MODAL_FIELDS } from './constants'
+import { BUG_MODAL_FIELDS } from './constants'
 import {
   createBugPreflightSession,
   deleteBug,
@@ -20,7 +20,7 @@ import {
   setFeatureMessageMetadata,
   updateFeatureStatus
 } from './db/features'
-import { addSubscription, isSubscribed, removeSubscription } from './db/subscriptions'
+import { addSubscription, isSubscribed, listSubscribedItemIds, removeSubscription } from './db/subscriptions'
 import { createBugFromSubmission } from './feedback/create-bug'
 import { createFeatureFromSubmission } from './feedback/create-feature'
 import { deriveTitleFromDescription } from './feedback/derive-title'
@@ -65,6 +65,7 @@ import {
   verifyDiscordRequest,
   getCommandPath,
   getModalFieldValues,
+  getFeatureSubmissionValues,
   getModalUploadedAttachmentUrl
 } from './discord/interactions'
 import {
@@ -148,18 +149,27 @@ async function canManageDashboard(env: Env, client: DiscordRestClient, cookieHea
     return false
   }
 
-  const token = getCookieValue(cookieHeader, 'dashboard_session')
-  const session = await verifySignedSessionToken(env.COOKIE_SECRET, token)
-  if (!session) {
+  const userId = await getDashboardSessionUserId(env, cookieHeader)
+  if (!userId) {
     return false
   }
 
   try {
-    const member = await client.getGuildMember(env.DISCORD_GUILD_ID, session.userId)
+    const member = await client.getGuildMember(env.DISCORD_GUILD_ID, userId)
     return hasAnyRole(member.roles, env.DISCORD_MOD_ROLE_IDS)
   } catch {
     return false
   }
+}
+
+async function getDashboardSessionUserId(env: Env, cookieHeader: string | null): Promise<string | null> {
+  if (!env.COOKIE_SECRET) {
+    return null
+  }
+
+  const token = getCookieValue(cookieHeader, 'dashboard_session')
+  const session = await verifySignedSessionToken(env.COOKIE_SECRET, token)
+  return session?.userId ?? null
 }
 
 function buildCreatedMessage(kind: string, id: number, messageUrl: string | null, fallbackUrl?: string | null): string {
@@ -554,8 +564,7 @@ async function handleModalSubmit(env: Env, client: DiscordRestClient, interactio
   const featureModalState = parseFeatureModalCustomId(interaction.data.custom_id)
   if (featureModalState) {
     const parsed = featureSubmissionSchema.safeParse({
-      ...getModalFieldValues(interaction, 'feature'),
-      screenshot_url: getModalUploadedAttachmentUrl(interaction, FEATURE_MODAL_FIELDS.screenshot),
+      ...getFeatureSubmissionValues(interaction),
       source_guild_id: featureModalState.sourceGuildId,
       source_channel_id: featureModalState.sourceChannelId,
       source_message_id: featureModalState.sourceMessageId
@@ -938,16 +947,39 @@ export function createApp() {
   app.get('/dashboard', async (c) => {
     const bugFilter = getDashboardBugFilter(c.req.query('bugStatus'))
     const suggestionFilter = getDashboardSuggestionFilter(c.req.query('suggestionStatus') ?? c.req.query('feedbackStatus'))
+    const cookieHeader = c.req.header('Cookie') ?? null
     const client = new DiscordRestClient(c.env)
-    const canManage = await canManageDashboard(c.env, client, c.req.header('Cookie') ?? null)
+    const viewerId = await getDashboardSessionUserId(c.env, cookieHeader)
+    const canManage = await canManageDashboard(c.env, client, cookieHeader)
 
     const [rawBugs, rawFeatures] = await Promise.all([
       listBugs(c.env.DB, mapBugFilterToStatus(bugFilter), 'newest'),
       listFeatures(c.env.DB, { status: mapSuggestionFilterToStatus(suggestionFilter), sort: 'newest', limit: 200 })
     ])
 
+    let followedBugIds = new Set<number>()
+    let followedFeatureIds = new Set<number>()
+
+    if (viewerId) {
+      ;[followedBugIds, followedFeatureIds] = await Promise.all([
+        listSubscribedItemIds(
+          c.env.DB,
+          'bug',
+          viewerId,
+          rawBugs.map((bug) => bug.id)
+        ),
+        listSubscribedItemIds(
+          c.env.DB,
+          'feature',
+          viewerId,
+          rawFeatures.map((feature) => feature.id)
+        )
+      ])
+    }
+
     const bugs = rawBugs.map((bug) => ({
       ...bug,
+      viewer_is_following: followedBugIds.has(bug.id),
       message_url: buildDiscordMessageUrl(c.env, bug.channel_id ?? null, bug.message_id ?? null),
       source_message_url:
         bug.source_guild_id && bug.source_channel_id && bug.source_message_id
@@ -957,6 +989,7 @@ export function createApp() {
 
     const features = rawFeatures.map((feature) => ({
       ...feature,
+      viewer_is_following: followedFeatureIds.has(feature.id),
       message_url: buildDiscordMessageUrl(c.env, feature.channel_id ?? null, feature.message_id ?? null),
       source_message_url:
         feature.source_guild_id && feature.source_channel_id && feature.source_message_id
@@ -971,19 +1004,15 @@ export function createApp() {
         currentBugFilter: bugFilter,
         currentSuggestionFilter: suggestionFilter,
         canManage,
-        authUrl: c.env.COOKIE_SECRET && c.env.DISCORD_CLIENT_SECRET && c.env.PUBLIC_APP_URL ? '/auth/discord/start' : null,
-        logoutUrl: canManage ? '/auth/logout' : null
+        isAuthenticated: Boolean(viewerId),
+        authUrl: !viewerId && c.env.COOKIE_SECRET && c.env.DISCORD_CLIENT_SECRET && c.env.PUBLIC_APP_URL ? '/auth/discord/start' : null,
+        logoutUrl: viewerId ? '/auth/logout' : null
       })
     )
   })
 
   app.post('/dashboard/actions', async (c) => {
     const client = new DiscordRestClient(c.env)
-    const authorized = await canManageDashboard(c.env, client, c.req.header('Cookie') ?? null)
-    if (!authorized) {
-      return c.text('Unauthorized', 401)
-    }
-
     const formData = await c.req.formData()
     const kind = String(formData.get('kind') ?? '')
     const action = String(formData.get('action') ?? '')
@@ -992,17 +1021,70 @@ export function createApp() {
     const suggestionFilter = getDashboardSuggestionFilter(
       String(formData.get('suggestionStatus') ?? formData.get('feedbackStatus') ?? 'all')
     )
+    const cookieHeader = c.req.header('Cookie') ?? null
+    const viewerId = await getDashboardSessionUserId(c.env, cookieHeader)
+    const canManage = await canManageDashboard(c.env, client, cookieHeader)
+    const authConfigured = Boolean(c.env.COOKIE_SECRET && c.env.DISCORD_CLIENT_SECRET && c.env.PUBLIC_APP_URL)
 
     if (!Number.isInteger(id) || id <= 0) {
       return c.redirect(buildDashboardUrl(bugFilter, suggestionFilter))
     }
 
-    const result =
-      kind === 'bug'
-        ? await handleDashboardBugAction(c.env, client, id, action)
-        : kind === 'feedback' || kind === 'suggestion'
-          ? await handleDashboardFeedbackAction(c.env, client, id, action)
-          : { ok: false as const, message: 'Unsupported dashboard action.' }
+    if ((action === 'upvote' || action === 'follow') && !viewerId) {
+      return c.redirect(authConfigured ? '/auth/discord/start' : buildDashboardUrl(bugFilter, suggestionFilter))
+    }
+
+    if (action !== 'upvote' && action !== 'follow' && !canManage) {
+      return c.text('Unauthorized', 401)
+    }
+
+    let result: { ok: true } | { ok: false; message: string }
+
+    if (kind === 'bug') {
+      if (action === 'upvote') {
+        const upvoteResult = await upvoteBug(c.env.DB, id, viewerId as string)
+        if (!upvoteResult.ok) {
+          result = upvoteResult
+        } else {
+          await syncBugMessage(c.env, client, upvoteResult.bug.id)
+          result = { ok: true as const }
+        }
+      } else if (action === 'follow') {
+        const currentlySubscribed = await isSubscribed(c.env.DB, 'bug', id, viewerId as string)
+        if (currentlySubscribed) {
+          await removeSubscription(c.env.DB, 'bug', id, viewerId as string)
+        } else {
+          await addSubscription(c.env.DB, 'bug', id, viewerId as string)
+        }
+        await syncBugMessage(c.env, client, id)
+        result = { ok: true as const }
+      } else {
+        result = await handleDashboardBugAction(c.env, client, id, action)
+      }
+    } else if (kind === 'feedback' || kind === 'suggestion') {
+      if (action === 'upvote') {
+        const upvoteResult = await upvoteFeature(c.env.DB, id, viewerId as string)
+        if (!upvoteResult.ok) {
+          result = upvoteResult
+        } else {
+          await syncFeatureMessage(c.env, client, upvoteResult.feature.id)
+          result = { ok: true as const }
+        }
+      } else if (action === 'follow') {
+        const currentlySubscribed = await isSubscribed(c.env.DB, 'feature', id, viewerId as string)
+        if (currentlySubscribed) {
+          await removeSubscription(c.env.DB, 'feature', id, viewerId as string)
+        } else {
+          await addSubscription(c.env.DB, 'feature', id, viewerId as string)
+        }
+        await syncFeatureMessage(c.env, client, id)
+        result = { ok: true as const }
+      } else {
+        result = await handleDashboardFeedbackAction(c.env, client, id, action)
+      }
+    } else {
+      result = { ok: false as const, message: 'Unsupported dashboard action.' }
+    }
 
     if (!result.ok) {
       console.error('dashboard.action_failed', { kind, action, id, message: result.message })

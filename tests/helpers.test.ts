@@ -8,6 +8,7 @@ import {
   buildPreflightCustomId,
   getCommandOptionInteger,
   getCommandOptionString,
+  getFeatureSubmissionValues,
   getModalFieldValues,
   getModalUploadedAttachmentUrl,
   hasAnyRole,
@@ -205,6 +206,10 @@ describe('modal builders and parsers', () => {
       feature_screenshot: ['file1']
     })
     expect(getModalUploadedAttachmentUrl(interaction, 'feature_screenshot')).toBe('https://example.com/mock.png')
+    expect(getFeatureSubmissionValues(interaction)).toEqual({
+      description: 'A quick filter for the dashboard.',
+      screenshot_url: 'https://example.com/mock.png'
+    })
   })
 })
 
@@ -249,14 +254,22 @@ describe('public message builders', () => {
 
     expect(rendered.flags).toBe(MessageFlags.IsComponentsV2)
     expect(rendered.components?.[0]?.type).toBe(ComponentType.Container)
-    const container = rendered.components?.[0] as { accent_color?: number; components: Array<{ type: number; components?: Array<{ label?: string; disabled?: boolean; url?: string }> }> }
+    const container = rendered.components?.[0] as {
+      accent_color?: number
+      components: Array<{ type: number; content?: string; components?: Array<{ label?: string; disabled?: boolean; url?: string }> }>
+    }
     expect(container.accent_color).toBe(0x27ae60)
+    const section = container.components.find((component) => component.type === ComponentType.Section) as
+      | { components?: Array<{ content?: string }> }
+      | undefined
+    expect(section?.components).toHaveLength(2)
+    expect(section?.components?.[0]?.content).toBe(`### \u{168A5} #1 - Fixed Bug`)
+    expect(section?.components?.[1]?.content).toBe('<@123> desc')
     const buttons = container.components.find((component) => component.type === ComponentType.ActionRow)?.components ?? []
-    expect(buttons[0]?.label).toBe('Upvote')
+    expect(buttons[0]?.label).toBe('\u{1F53A} 2')
     expect(buttons[0]?.disabled).toBe(true)
-    expect(buttons[1]?.label).toBe('🔔 Follow')
-    expect(buttons[2]?.url).toBe('https://example.com/dashboard#bug-1')
-    expect(buttons[3]?.label).toBe('Manage')
+    expect(buttons[1]?.label).toBe('Follow')
+    expect(buttons[2]?.label).toBe('Manage')
   })
 
   it('renders a component-driven feature card', () => {
@@ -284,12 +297,49 @@ describe('public message builders', () => {
 
     expect(rendered.flags).toBe(MessageFlags.IsComponentsV2)
     expect(rendered.components?.[0]?.type).toBe(ComponentType.Container)
-    const container = rendered.components?.[0] as { accent_color?: number; components: Array<{ type: number; components?: Array<{ disabled?: boolean; url?: string; label?: string }> }> }
+    const container = rendered.components?.[0] as {
+      accent_color?: number
+      components: Array<{ type: number; content?: string; components?: Array<{ disabled?: boolean; url?: string; label?: string }> }>
+    }
     expect(container.accent_color).toBe(0xf1c40f)
+    const section = container.components.find((component) => component.type === ComponentType.Section) as
+      | { components?: Array<{ content?: string }> }
+      | undefined
+    expect(section?.components).toHaveLength(2)
+    expect(section?.components?.[0]?.content).toBe(`### \u2726 #3 - Open Suggestion`)
+    expect(section?.components?.[1]?.content).toBe('<@123> Add search to the dashboard')
     const buttons = container.components.find((component) => component.type === ComponentType.ActionRow)?.components ?? []
+    expect(buttons[0]?.label).toBe('\u{1F53A} 5')
     expect(buttons[0]?.disabled).not.toBe(true)
-    expect(buttons[1]?.label).toBe('🔔 Follow')
-    expect(buttons[2]?.url).toBe('https://discord.com/channels/1/2/3')
+    expect(buttons[1]?.label).toBe('Follow')
+    expect(buttons[2]?.label).toBe('Manage')
+  })
+
+  it('omits a header accessory when there is no screenshot or card link', () => {
+    const rendered = renderFeatureMessage({
+      id: 4,
+      title: 'Keyboard shortcuts',
+      description: 'Add shortcuts for triage.',
+      benefit: '',
+      screenshot_url: null,
+      status: 'OPEN',
+      reporter_id: '456',
+      votes_count: 1,
+      channel_id: null,
+      message_id: null,
+      source_guild_id: null,
+      source_channel_id: null,
+      source_message_id: null,
+      status_note: null,
+      created_at: '2026-03-18T00:00:00Z',
+      updated_at: '2026-03-18T00:00:00Z'
+    })
+
+    const container = rendered.components?.[0] as {
+      components: Array<{ type: number; accessory?: unknown }>
+    }
+    const section = container.components.find((component) => component.type === ComponentType.Section)
+    expect(section?.accessory).toBeUndefined()
   })
 })
 

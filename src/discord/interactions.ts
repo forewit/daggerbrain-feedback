@@ -268,6 +268,18 @@ export function getModalUploadedAttachmentUrl(interaction: APIModalSubmitInterac
   return attachment?.url ?? null
 }
 
+export function getFeatureSubmissionValues(interaction: APIModalSubmitInteraction): {
+  description: string
+  screenshot_url: string | null
+} {
+  const values = getModalFieldValues(interaction, 'feature')
+  const description = values[FEATURE_MODAL_FIELDS.description]
+  return {
+    description: typeof description === 'string' ? description : '',
+    screenshot_url: getModalUploadedAttachmentUrl(interaction, FEATURE_MODAL_FIELDS.screenshot)
+  }
+}
+
 function parseRelationshipToken(token: string): BugRelationshipType | null | undefined {
   if (token === 'dup') return 'DUPLICATE_OF'
   if (token === 'reg') return 'REGRESSION_OF'

@@ -51,6 +51,29 @@ export async function isSubscribed(
   return Boolean(row?.subscribed)
 }
 
+export async function listSubscribedItemIds(
+  db: D1Database,
+  itemKind: SubscriptionItemKind,
+  userId: string,
+  itemIds: number[]
+): Promise<Set<number>> {
+  if (itemIds.length === 0) {
+    return new Set<number>()
+  }
+
+  const placeholders = itemIds.map(() => '?').join(', ')
+  const result = await db
+    .prepare(`
+      SELECT item_id
+      FROM subscriptions
+      WHERE item_kind = ? AND user_id = ? AND item_id IN (${placeholders})
+    `)
+    .bind(itemKind, userId, ...itemIds)
+    .all<Record<string, unknown>>()
+
+  return new Set((result.results ?? []).map((row) => Number(row.item_id)))
+}
+
 export async function countSubscriptions(db: D1Database, itemKind: SubscriptionItemKind, itemId: number): Promise<number> {
   const row = await db
     .prepare(`SELECT COUNT(*) AS count FROM subscriptions WHERE item_kind = ? AND item_id = ?`)

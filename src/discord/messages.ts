@@ -15,10 +15,9 @@ import {
   type APILabelComponent,
   type APIModalInteractionResponse,
   type APIModalInteractionResponseCallbackComponent,
+  type APISectionAccessoryComponent,
   type APISectionComponent,
   type APIThumbnailComponent,
-  type APISelectMenuOption,
-  type APIStringSelectComponent,
   type APITextDisplayComponent,
   type APITextInputComponent,
   type RESTPostAPIChannelMessageJSONBody
@@ -50,8 +49,12 @@ const EMOJI = {
   shipped: '\u{1F680}',
   declined: '\u{1F6AB}',
   follow: '\u{1F514}',
-  upvotes: '\u2B06\uFE0F'
+  upvotes: '\u2B06\uFE0F',
+  upvoteCompact: '\u{1F53A}'
 } as const
+
+const BUG_KEY_MARKER = '\u{168A5}'
+const FEATURE_KEY_MARKER = '\u2726'
 
 const bugStatusMeta = {
   OPEN: { label: 'Open', emoji: EMOJI.open, color: 0xe74c3c },
@@ -132,25 +135,6 @@ function paragraphTextInput(
   return modalLabel(label, component, options?.description)
 }
 
-function stringSelect(
-  customId: string,
-  label: string,
-  options: APISelectMenuOption[],
-  description: string,
-  placeholder: string
-): APILabelComponent {
-  const component: APIStringSelectComponent = {
-    type: ComponentType.StringSelect,
-    custom_id: customId,
-    min_values: 0,
-    max_values: 1,
-    placeholder,
-    options
-  }
-
-  return modalLabel(label, component, description)
-}
-
 function fileUpload(customId: string, label: string, description: string): APILabelComponent {
   const component: APIFileUploadComponent = {
     type: ComponentType.FileUpload,
@@ -221,10 +205,6 @@ function itemCardActionRow(buttons: MessageButton[]): ButtonRow {
   }
 }
 
-function sourceMessageLabel(url: string | null): string | null {
-  return url ? `[Source message](${url})` : null
-}
-
 export function ephemeralMessage(content: string, components: ButtonRow[] = []): APIInteractionResponseChannelMessageWithSource {
   return {
     type: InteractionResponseType.ChannelMessageWithSource,
@@ -247,35 +227,10 @@ export function bugModalResponse(options: {
   targetBugId: number | null
 }): APIModalInteractionResponse {
   const components: APIModalInteractionResponseCallbackComponent[] = [
-    stringSelect(
-      BUG_MODAL_FIELDS.platform,
-      'Where did you hit it?',
-      [
-        { label: 'Web', value: 'WEB' },
-        { label: 'iOS', value: 'IOS' },
-        { label: 'Android', value: 'ANDROID' },
-        { label: 'Desktop', value: 'DESKTOP' },
-        { label: 'Other', value: 'OTHER' }
-      ],
-      'Optional, but it helps triage fast.',
-      'Pick a platform'
-    ),
-    stringSelect(
-      BUG_MODAL_FIELDS.severity,
-      'How rough is it?',
-      [
-        { label: 'Low', value: 'LOW' },
-        { label: 'Medium', value: 'MEDIUM' },
-        { label: 'High', value: 'HIGH' },
-        { label: 'Critical', value: 'CRITICAL' }
-      ],
-      'Optional. Think user impact.',
-      'Pick a severity'
-    ),
     fileUpload(BUG_MODAL_FIELDS.screenshot, 'Screenshot', 'Optional. A quick visual goes a long way.'),
     paragraphTextInput(BUG_MODAL_FIELDS.description, 'Description', {
       value: options.initialDescription,
-      placeholder: 'Describe the bug and any context that would help us understand it.',
+      placeholder: 'Describe the bug, and include platform or severity if it matters.',
       required: true,
       maxLength: 1000
     })
@@ -456,62 +411,45 @@ export function featureManageResponse(feature: FeatureRecord): APIInteractionRes
   return ephemeralMessage(`Manage suggestion #${feature.id}`, buttonRows(buttons))
 }
 
-function joinCompactParts(parts: Array<string | null | undefined>): string | null {
-  const compact = parts.map((part) => part?.trim()).filter(Boolean) as string[]
-  return compact.length > 0 ? compact.join(' • ') : null
+function buildItemKey(kind: 'bug' | 'feature', id: number): string {
+  return `${kind === 'bug' ? BUG_KEY_MARKER : FEATURE_KEY_MARKER} #${id}`
 }
 
-function buildBugSummaryText(
-  bug: BugRecord,
-  followerCount: number,
-  options?: { relatedBugUrl?: string | null; sourceMessageUrl?: string | null }
-): string {
+function buildReporterSummary(reporterId: string, description: string): string {
+  const summary = compactValue(description) ?? 'No additional details provided.'
+  return truncate(`<@${reporterId}> ${summary}`, 500)
+}
+
+function buildBugHeaderText(bug: BugRecord): string {
   const status = bugStatusMeta[bug.status]
-  const lines = [
-    joinCompactParts([`${status.emoji} **${status.label}**`, `${EMOJI.upvotes} **${bug.votes_count}**`, `${EMOJI.follow} **${followerCount}**`]),
-    joinCompactParts([
-      `Reporter: <@${bug.reporter_id}>`,
-      bug.platform ? `Platform: ${bugPlatformLabels[bug.platform] ?? bug.platform}` : null,
-      bug.severity ? `Severity: ${bugSeverityLabels[bug.severity] ?? bug.severity}` : null
-    ]),
-    bug.status_note ? `Note: ${bug.status_note}` : null,
-    bug.status === 'DUPLICATE' && options?.relatedBugUrl && bug.related_bug_id
-      ? `Tracking under [bug #${bug.related_bug_id}](${options.relatedBugUrl})`
-      : null,
-    sourceMessageLabel(options?.sourceMessageUrl ?? null)
-  ]
-
-  return lines.filter(Boolean).join('\n')
+  return `${buildItemKey('bug', bug.id)} - ${status.label} Bug`
 }
 
-function buildFeatureSummaryText(feature: FeatureRecord, followerCount: number, options?: { sourceMessageUrl?: string | null }): string {
+function buildFeatureHeaderText(feature: FeatureRecord): string {
   const status = suggestionStatusMeta[feature.status]
-  const lines = [
-    joinCompactParts([`${status.emoji} **${status.label}**`, `${EMOJI.upvotes} **${feature.votes_count}**`, `${EMOJI.follow} **${followerCount}**`]),
-    joinCompactParts([`Reporter: <@${feature.reporter_id}>`, sourceMessageLabel(options?.sourceMessageUrl ?? null)]),
-    feature.status_note ? `Note: ${feature.status_note}` : null
-  ]
-
-  return lines.filter(Boolean).join('\n')
+  return `${buildItemKey('feature', feature.id)} - ${status.label} Suggestion`
 }
 
-function buildBugActionRow(bug: BugRecord, bugUrl: string | null): ButtonRow {
+function buildBugActionRow(bug: BugRecord): ButtonRow {
   const isClosed = bug.status === 'FIXED' || bug.status === 'CLOSED' || bug.status === 'DUPLICATE'
   const buttons: MessageButton[] = [
-    button(`${CUSTOM_IDS.upvotePrefix}${bug.id}`, 'Upvote', ButtonStyle.Primary, isClosed),
-    button(`${CUSTOM_IDS.followPrefix}${bug.id}`, `${EMOJI.follow} Follow`, ButtonStyle.Secondary),
-    ...(bugUrl ? [linkButton('Open Card', bugUrl)] : []),
+    button(`${CUSTOM_IDS.upvotePrefix}${bug.id}`, `${EMOJI.upvoteCompact} ${bug.votes_count}`, ButtonStyle.Primary, isClosed),
+    button(`${CUSTOM_IDS.followPrefix}${bug.id}`, 'Follow', ButtonStyle.Secondary),
     button(bugManageCustomId(bug.id), 'Manage', ButtonStyle.Secondary)
   ]
 
   return itemCardActionRow(buttons)
 }
 
-function buildFeatureActionRow(feature: FeatureRecord, featureUrl: string | null): ButtonRow {
+function buildFeatureActionRow(feature: FeatureRecord): ButtonRow {
   const buttons: MessageButton[] = [
-    button(`${CUSTOM_IDS.featureUpvotePrefix}${feature.id}`, 'Upvote', ButtonStyle.Primary, feature.status !== 'OPEN'),
-    button(`${CUSTOM_IDS.featureFollowPrefix}${feature.id}`, `${EMOJI.follow} Follow`, ButtonStyle.Secondary),
-    ...(featureUrl ? [linkButton('Open Card', featureUrl)] : []),
+    button(
+      `${CUSTOM_IDS.featureUpvotePrefix}${feature.id}`,
+      `${EMOJI.upvoteCompact} ${feature.votes_count}`,
+      ButtonStyle.Primary,
+      feature.status !== 'OPEN'
+    ),
+    button(`${CUSTOM_IDS.featureFollowPrefix}${feature.id}`, 'Follow', ButtonStyle.Secondary),
     button(featureManageCustomId(feature.id), 'Manage', ButtonStyle.Secondary)
   ]
 
@@ -520,7 +458,6 @@ function buildFeatureActionRow(feature: FeatureRecord, featureUrl: string | null
 
 function bugCardComponents(
   bug: BugRecord,
-  followerCount: number,
   options?: {
     relatedBug?: Pick<BugRecord, 'id' | 'title'> | null
     relatedBugUrl?: string | null
@@ -529,29 +466,29 @@ function bugCardComponents(
   }
 ): APIContainerComponent[] {
   const status = bugStatusMeta[bug.status]
-  const title = `#${bug.id} ${truncate(bug.title, 140)}`
-  const summary = compactValue(bug.description) ?? 'No additional details provided.'
-  const summaryText = buildBugSummaryText(bug, followerCount, {
-    relatedBugUrl: options?.relatedBugUrl ?? null,
-    sourceMessageUrl: options?.sourceMessageUrl ?? null
-  })
+  const title = buildBugHeaderText(bug)
+  const summary = buildReporterSummary(bug.reporter_id, bug.description)
 
-  const sectionAccessory = bug.screenshot_url
+  const sectionAccessory: APISectionAccessoryComponent | null = bug.screenshot_url
     ? ({ type: ComponentType.Thumbnail, media: { url: bug.screenshot_url }, description: 'Bug screenshot' } satisfies APIThumbnailComponent)
     : (options?.bugUrl
         ? linkButton('Open Card', options.bugUrl)
-        : button(bugManageCustomId(bug.id, 'section'), 'Manage', ButtonStyle.Secondary))
+        : null)
 
-  const section: APISectionComponent = {
-    type: ComponentType.Section,
-    components: [textDisplay(`## ${EMOJI.bug} ${title}`), textDisplay(truncate(summary, 500)), textDisplay(summaryText)],
-    accessory: sectionAccessory
-  }
-
-  const components = [
-    section,
-    buildBugActionRow(bug, options?.bugUrl ?? null)
-  ]
+  const components = sectionAccessory
+    ? [
+        {
+          type: ComponentType.Section,
+          components: [textDisplay(`### ${title}`), textDisplay(truncate(summary, 500))],
+          accessory: sectionAccessory
+        } satisfies APISectionComponent,
+        buildBugActionRow(bug)
+      ]
+    : [
+        textDisplay(`### ${title}`),
+        textDisplay(summary),
+        buildBugActionRow(bug)
+      ]
 
   return [
     {
@@ -564,30 +501,32 @@ function bugCardComponents(
 
 function featureCardComponents(
   feature: FeatureRecord,
-  followerCount: number,
   options?: { featureUrl?: string | null; sourceMessageUrl?: string | null }
 ): APIContainerComponent[] {
   const status = suggestionStatusMeta[feature.status]
-  const title = `#${feature.id} ${truncate(feature.title, 140)}`
-  const summary = compactValue(feature.description) ?? 'No additional details provided.'
-  const summaryText = buildFeatureSummaryText(feature, followerCount, { sourceMessageUrl: options?.sourceMessageUrl ?? null })
+  const title = buildFeatureHeaderText(feature)
+  const summary = buildReporterSummary(feature.reporter_id, feature.description)
 
-  const sectionAccessory = feature.screenshot_url
+  const sectionAccessory: APISectionAccessoryComponent | null = feature.screenshot_url
     ? ({ type: ComponentType.Thumbnail, media: { url: feature.screenshot_url }, description: 'Suggestion screenshot' } satisfies APIThumbnailComponent)
     : (options?.featureUrl
         ? linkButton('Open Card', options.featureUrl)
-        : button(featureManageCustomId(feature.id, 'section'), 'Manage', ButtonStyle.Secondary))
+        : null)
 
-  const section: APISectionComponent = {
-    type: ComponentType.Section,
-    components: [textDisplay(`## ${EMOJI.feedback} ${title}`), textDisplay(truncate(summary, 500)), textDisplay(summaryText)],
-    accessory: sectionAccessory
-  }
-
-  const components = [
-    section,
-    buildFeatureActionRow(feature, options?.featureUrl ?? null)
-  ]
+  const components = sectionAccessory
+    ? [
+        {
+          type: ComponentType.Section,
+          components: [textDisplay(`### ${title}`), textDisplay(truncate(summary, 500))],
+          accessory: sectionAccessory
+        } satisfies APISectionComponent,
+        buildFeatureActionRow(feature)
+      ]
+    : [
+        textDisplay(`### ${title}`),
+        textDisplay(summary),
+        buildFeatureActionRow(feature)
+      ]
 
   return [
     {
@@ -611,7 +550,7 @@ export function renderBugMessage(
   return {
     allowed_mentions: { parse: [] },
     flags: MessageFlags.IsComponentsV2,
-    components: bugCardComponents(bug, options?.followerCount ?? 0, options)
+    components: bugCardComponents(bug, options)
   }
 }
 
@@ -622,7 +561,7 @@ export function renderFeatureMessage(
   return {
     allowed_mentions: { parse: [] },
     flags: MessageFlags.IsComponentsV2,
-    components: featureCardComponents(feature, options?.followerCount ?? 0, options)
+    components: featureCardComponents(feature, options)
   }
 }
 
