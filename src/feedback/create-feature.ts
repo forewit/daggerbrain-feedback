@@ -5,6 +5,9 @@ import { deriveTitleFromDescription } from './derive-title'
 interface CreateFeatureSubmissionInput {
   description: string
   screenshot_url: string | null
+  source_guild_id?: string | null
+  source_channel_id?: string | null
+  source_message_id?: string | null
 }
 
 export async function createFeatureFromSubmission(
@@ -17,7 +20,11 @@ export async function createFeatureFromSubmission(
     description: input.description,
     benefit: '',
     screenshot_url: input.screenshot_url,
-    reporter_id: userId
+    reporter_id: userId,
+    source_guild_id: input.source_guild_id ?? null,
+    source_channel_id: input.source_channel_id ?? null,
+    source_message_id: input.source_message_id ?? null,
+    status_note: null
   })
 
   const feature = await getFeatureById(db, featureId)

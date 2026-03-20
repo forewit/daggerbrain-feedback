@@ -56,6 +56,7 @@ function summarizePayload(body: JsonBody | undefined): Record<string, unknown> |
   if ('embeds' in body && Array.isArray(body.embeds)) summary.embed_count = body.embeds.length
   if ('components' in body && Array.isArray(body.components)) summary.component_count = body.components.length
   if ('applied_tags' in body && Array.isArray(body.applied_tags)) summary.applied_tag_count = body.applied_tags.length
+  if ('poll' in body && body.poll) summary.has_poll = true
 
   return summary
 }
@@ -91,6 +92,8 @@ export type DiscordChannelRecord = Pick<APIChannel, 'id' | 'type' | 'name' | 'fl
   available_tags?: Array<{ id: string; name: string; moderated?: boolean }>
   applied_tags?: string[]
 }
+
+export type DiscordGuildMemberRecord = { user?: { id: string }; roles?: string[] }
 
 export class DiscordRestClient {
   constructor(private readonly env: Env) {}
@@ -133,5 +136,15 @@ export class DiscordRestClient {
     await discordRequest<unknown>(this.env, Routes.channel(channelId), 'PATCH', {
       applied_tags: appliedTags
     })
+  }
+
+  async createDmChannel(userId: string): Promise<{ id: string }> {
+    return discordRequest<{ id: string }>(this.env, '/users/@me/channels', 'POST', {
+      recipient_id: userId
+    } as unknown as RESTPatchAPIChannelJSONBody)
+  }
+
+  async getGuildMember(guildId: string, userId: string): Promise<DiscordGuildMemberRecord> {
+    return discordRequest<DiscordGuildMemberRecord>(this.env, Routes.guildMember(guildId, userId), 'GET')
   }
 }

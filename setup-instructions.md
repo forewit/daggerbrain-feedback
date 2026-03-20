@@ -41,6 +41,7 @@ Optional non-secret variable in `wrangler.toml`:
 Optional local `.env` value for deployment automation:
 
 - `COMMANDS_REGISTER_URL`: override the URL used by `npm run register-commands` / post-deploy registration. If omitted, the script falls back to `PUBLIC_APP_URL`.
+- `COMMANDS_REGISTER_SECRET`: required if `/commands/register` is protected by `COMMANDS_REGISTER_SECRET` in the Worker environment. The registration script sends this as the `x-register-secret` header.
 
 ## 4. Apply database migrations
 
@@ -70,6 +71,12 @@ This calls:
 
 ```text
 POST <COMMANDS_REGISTER_URL or PUBLIC_APP_URL>/commands/register
+```
+
+If command registration protection is enabled, it also sends:
+
+```text
+x-register-secret: <COMMANDS_REGISTER_SECRET>
 ```
 
 In development, if `DISCORD_DEV_GUILD_ID` is set, commands are registered to that guild. Otherwise, they are registered globally.

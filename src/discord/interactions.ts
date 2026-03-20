@@ -1,10 +1,14 @@
 import { verifyKey } from 'discord-interactions'
 import {
+  ApplicationCommandOptionType,
+  ApplicationCommandType,
   ComponentType,
   InteractionType,
   type APIApplicationCommandInteraction,
+  type APIApplicationCommandAutocompleteInteraction,
   type APIAttachment,
   type APIInteraction,
+  type APIMessage,
   type APIMessageComponentInteraction,
   type APIModalSubmissionComponent,
   type APIModalSubmitInteraction
@@ -22,6 +26,7 @@ type ModalValue = string | string[] | boolean
 
 interface AttachmentResolvedData {
   attachments?: Record<string, APIAttachment>
+  messages?: Record<string, APIMessage>
 }
 
 export async function verifyDiscordRequest(
@@ -49,6 +54,12 @@ export function isApplicationCommandInteraction(interaction: APIInteraction): in
   return interaction.type === InteractionType.ApplicationCommand
 }
 
+export function isAutocompleteInteraction(
+  interaction: APIInteraction
+): interaction is APIApplicationCommandAutocompleteInteraction {
+  return interaction.type === InteractionType.ApplicationCommandAutocomplete
+}
+
 export function isModalSubmitInteraction(interaction: APIInteraction): interaction is APIModalSubmitInteraction {
   return interaction.type === InteractionType.ModalSubmit
 }
@@ -59,6 +70,14 @@ export function isMessageComponentInteraction(interaction: APIInteraction): inte
 
 export function getInteractionUserId(interaction: APIInteraction): string | null {
   return interaction.member?.user?.id ?? interaction.user?.id ?? null
+}
+
+export function getInteractionGuildId(interaction: APIInteraction): string | null {
+  return interaction.guild_id ?? null
+}
+
+export function getInteractionChannelId(interaction: APIInteraction): string | null {
+  return interaction.channel_id ?? null
 }
 
 function flattenCommandOptions(options: CommandOption[] | undefined): CommandOption[] {
@@ -92,6 +111,86 @@ export function getCommandOptionString(interaction: APIApplicationCommandInterac
 export function getCommandOptionInteger(interaction: APIApplicationCommandInteraction, name: string): number | null {
   const value = getCommandOptionValue(interaction, name)
   return typeof value === 'number' ? value : null
+}
+
+export function getCommandOptionAttachment(interaction: APIApplicationCommandInteraction, name: string): APIAttachment | null {
+  const value = getCommandOptionValue(interaction, name)
+  if (typeof value !== 'string') {
+    return null
+  }
+
+  const attachments = ((interaction.data as { resolved?: AttachmentResolvedData }).resolved)?.attachments ?? {}
+  return attachments[value] ?? null
+}
+
+export function getCommandName(interaction: APIApplicationCommandInteraction): string {
+  return interaction.data.name
+}
+
+export function getCommandPath(interaction: APIApplicationCommandInteraction): string[] {
+  const path = [interaction.data.name]
+  const options = (interaction.data as { options?: Array<{ name?: string; type?: number; options?: unknown[] }> }).options ?? []
+  const first = options[0]
+
+  if (
+    first?.name &&
+    (first.type === ApplicationCommandOptionType.Subcommand || first.type === ApplicationCommandOptionType.SubcommandGroup)
+  ) {
+    path.push(first.name)
+  }
+
+  if (first?.type === ApplicationCommandOptionType.SubcommandGroup) {
+    const nested = (first.options as Array<{ name?: string; type?: number }> | undefined)?.[0]
+    if (nested?.name && nested.type === ApplicationCommandOptionType.Subcommand) {
+      path.push(nested.name)
+    }
+  }
+
+  return path
+}
+
+export function isMessageCommandInteraction(interaction: APIApplicationCommandInteraction): boolean {
+  return interaction.data.type === ApplicationCommandType.Message
+}
+
+export function getMessageCommandTarget(interaction: APIApplicationCommandInteraction): {
+  messageId: string
+  content: string
+  attachmentUrl: string | null
+} | null {
+  if (!isMessageCommandInteraction(interaction)) {
+    return null
+  }
+
+  const targetId = (interaction.data as { target_id?: string }).target_id
+  const messages = ((interaction.data as { resolved?: AttachmentResolvedData }).resolved)?.messages ?? {}
+  const message = targetId ? messages[targetId] : null
+  if (!message) {
+    return null
+  }
+
+  const attachment = Object.values(message.attachments ?? {})[0]
+  return {
+    messageId: message.id,
+    content: message.content ?? '',
+    attachmentUrl: attachment?.url ?? null
+  }
+}
+
+export function getFocusedAutocompleteOption(interaction: APIApplicationCommandAutocompleteInteraction): {
+  name: string
+  value: string | number
+} | null {
+  const options = flattenCommandOptions((interaction.data as { options?: Array<CommandOption & { focused?: boolean }> }).options)
+  const focused = options.find((option) => 'focused' in option && (option as { focused?: boolean }).focused)
+  if (!focused?.name || focused.value === undefined || typeof focused.value === 'boolean') {
+    return null
+  }
+
+  return {
+    name: focused.name,
+    value: focused.value
+  }
 }
 
 function visitModalComponents(components: APIModalSubmissionComponent[], visitor: (component: APIModalSubmissionComponent | { custom_id: string; value?: string; values?: string[]; valueBoolean?: boolean }) => void) {
@@ -284,6 +383,40 @@ export function parseBugAction(customId: string | undefined): { action: 'upvote'
   return null
 }
 
+export function buildFeatureModalCustomId(
+  sourceGuildId: string | null,
+  sourceChannelId: string | null,
+  sourceMessageId: string | null
+): string {
+  if (!sourceGuildId || !sourceChannelId || !sourceMessageId) {
+    return CUSTOM_IDS.featureModal
+  }
+
+  return `${CUSTOM_IDS.featureModalPrefix}${sourceGuildId}:${sourceChannelId}:${sourceMessageId}`
+}
+
+export function parseFeatureModalCustomId(
+  customId: string | undefined
+): { sourceGuildId: string | null; sourceChannelId: string | null; sourceMessageId: string | null } | null {
+  if (!customId) return null
+
+  if (customId === CUSTOM_IDS.featureModal) {
+    return { sourceGuildId: null, sourceChannelId: null, sourceMessageId: null }
+  }
+
+  if (!customId.startsWith(CUSTOM_IDS.featureModalPrefix)) {
+    return null
+  }
+
+  const payload = customId.slice(CUSTOM_IDS.featureModalPrefix.length)
+  const [sourceGuildId, sourceChannelId, sourceMessageId] = payload.split(':')
+  if (!sourceGuildId || !sourceChannelId || !sourceMessageId) {
+    return null
+  }
+
+  return { sourceGuildId, sourceChannelId, sourceMessageId }
+}
+
 export function parseFeatureUpvote(customId: string | undefined): { featureId: number } | null {
   if (!customId?.startsWith(CUSTOM_IDS.featureUpvotePrefix)) {
     return null
@@ -295,6 +428,72 @@ export function parseFeatureUpvote(customId: string | undefined): { featureId: n
   }
 
   return { featureId }
+}
+
+export function parseSubscriptionAction(
+  customId: string | undefined
+): { itemKind: 'bug' | 'feature'; itemId: number; action: 'follow' | 'unfollow' } | null {
+  if (!customId) return null
+
+  const mappings = [
+    [CUSTOM_IDS.followPrefix, 'bug', 'follow'],
+    [CUSTOM_IDS.unfollowPrefix, 'bug', 'unfollow'],
+    [CUSTOM_IDS.featureFollowPrefix, 'feature', 'follow'],
+    [CUSTOM_IDS.featureUnfollowPrefix, 'feature', 'unfollow']
+  ] as const
+
+  for (const [prefix, itemKind, action] of mappings) {
+    if (customId.startsWith(prefix)) {
+      const itemId = Number(customId.slice(prefix.length))
+      if (!Number.isNaN(itemId) && itemId > 0) {
+        return { itemKind, itemId, action }
+      }
+    }
+  }
+
+  return null
+}
+
+export function parseManageAction(
+  customId: string | undefined
+): { itemKind: 'bug' | 'feature'; itemId: number } | null {
+  if (!customId) return null
+
+  if (customId.startsWith(CUSTOM_IDS.manageBugPrefix)) {
+    const itemId = Number(customId.slice(CUSTOM_IDS.manageBugPrefix.length).split(':')[0])
+    return !Number.isNaN(itemId) && itemId > 0 ? { itemKind: 'bug', itemId } : null
+  }
+
+  if (customId.startsWith(CUSTOM_IDS.manageFeaturePrefix)) {
+    const itemId = Number(customId.slice(CUSTOM_IDS.manageFeaturePrefix.length).split(':')[0])
+    return !Number.isNaN(itemId) && itemId > 0 ? { itemKind: 'feature', itemId } : null
+  }
+
+  return null
+}
+
+export function parseStatusAction(
+  customId: string | undefined
+): { itemKind: 'bug' | 'feature'; itemId: number; status: string } | null {
+  if (!customId) return null
+
+  const mappings = [
+    [CUSTOM_IDS.bugStatusActionPrefix, 'bug'],
+    [CUSTOM_IDS.featureStatusActionPrefix, 'feature']
+  ] as const
+
+  for (const [prefix, itemKind] of mappings) {
+    if (customId.startsWith(prefix)) {
+      const payload = customId.slice(prefix.length)
+      const [itemIdValue, status] = payload.split(':')
+      const itemId = Number(itemIdValue)
+      if (!Number.isNaN(itemId) && itemId > 0 && status) {
+        return { itemKind, itemId, status }
+      }
+    }
+  }
+
+  return null
 }
 
 export function hasManageMessagesPermission(permissions?: string): boolean {

@@ -1,6 +1,7 @@
 import { ChannelType } from 'discord-api-types/v10'
 import { getBugById } from '../db/bugs'
 import { getFeatureById } from '../db/features'
+import { countSubscriptions } from '../db/subscriptions'
 import type { BugRecord, Env, FeatureRecord } from '../types'
 import {
   renderLegacyBugMessage,
@@ -14,6 +15,20 @@ export function buildDiscordMessageUrl(env: Env, channelId: string | null, messa
   }
 
   return `https://discord.com/channels/${env.DISCORD_GUILD_ID}/${channelId}/${messageId}`
+}
+
+export function buildSourceMessageUrl(
+  env: Env,
+  guildId: string | null,
+  channelId: string | null,
+  messageId: string | null
+): string | null {
+  const resolvedGuildId = guildId ?? env.DISCORD_GUILD_ID ?? null
+  if (!resolvedGuildId || !channelId || !messageId) {
+    return null
+  }
+
+  return `https://discord.com/channels/${resolvedGuildId}/${channelId}/${messageId}`
 }
 
 export function buildDashboardBugUrl(env: Env, bugId: number): string | null {
@@ -75,19 +90,34 @@ function isMessageChannel(channelType: ChannelType): boolean {
   return channelType === ChannelType.GuildText || channelType === ChannelType.GuildAnnouncement
 }
 
+function buildForumStarterMessage(kind: 'bug' | 'feature', title: string, reporterId: string) {
+  return {
+    content: `${kind === 'bug' ? 'Bug' : 'Feedback'} intake: ${title}\nReporter: <@${reporterId}>`,
+    allowed_mentions: { parse: [] as [] }
+  }
+}
+
 export async function createBugReportMessage(env: Env, client: DiscordRestClient, bug: BugRecord) {
   const channel = await client.getChannel(env.BUG_REPORT_CHANNEL_ID)
   const relatedBug = bug.related_bug_id ? await getBugById(env.DB, bug.related_bug_id) : null
   const relatedBugUrl = relatedBug ? buildBugLink(env, relatedBug) : null
   const bugUrl = buildBugLink(env, bug)
-  const payload = renderLegacyBugMessage(bug, { relatedBug, relatedBugUrl, bugUrl })
+  const sourceMessageUrl = buildSourceMessageUrl(env, bug.source_guild_id, bug.source_channel_id, bug.source_message_id)
+  const followerCount = await countSubscriptions(env.DB, 'bug', bug.id)
+  const payload = renderLegacyBugMessage(bug, { relatedBug, relatedBugUrl, bugUrl, sourceMessageUrl, followerCount })
 
   if (isForumChannel(channel.type)) {
-    return client.createForumThread(channel.id, {
+    const thread = await client.createForumThread(channel.id, {
       name: bug.title,
-      message: payload,
+      message: buildForumStarterMessage('bug', bug.title, bug.reporter_id),
       applied_tags: getBugForumTagIds(channel, bug)
     })
+
+    const message = await client.createMessage(thread.channel_id, payload)
+    return {
+      channel_id: thread.channel_id,
+      id: message.id
+    }
   }
 
   if (isMessageChannel(channel.type)) {
@@ -100,14 +130,27 @@ export async function createBugReportMessage(env: Env, client: DiscordRestClient
 export async function createFeatureReportMessage(env: Env, client: DiscordRestClient, feature: FeatureRecord) {
   const channel = await client.getChannel(env.FEATURE_CHANNEL_ID)
   const featureUrl = buildFeatureLink(env, feature)
-  const payload = renderLegacyFeatureMessage(feature, { featureUrl })
+  const sourceMessageUrl = buildSourceMessageUrl(
+    env,
+    feature.source_guild_id,
+    feature.source_channel_id,
+    feature.source_message_id
+  )
+  const followerCount = await countSubscriptions(env.DB, 'feature', feature.id)
+  const payload = renderLegacyFeatureMessage(feature, { featureUrl, sourceMessageUrl, followerCount })
 
   if (isForumChannel(channel.type)) {
-    return client.createForumThread(channel.id, {
+    const thread = await client.createForumThread(channel.id, {
       name: feature.title,
-      message: payload,
+      message: buildForumStarterMessage('feature', feature.title, feature.reporter_id),
       applied_tags: getFeatureForumTagIds(channel, feature)
     })
+
+    const message = await client.createMessage(thread.channel_id, payload)
+    return {
+      channel_id: thread.channel_id,
+      id: message.id
+    }
   }
 
   if (isMessageChannel(channel.type)) {
@@ -127,10 +170,12 @@ export async function syncBugMessage(env: Env, client: DiscordRestClient, bugId:
     const relatedBug = bug.related_bug_id ? await getBugById(env.DB, bug.related_bug_id) : null
     const relatedBugUrl = relatedBug ? buildBugLink(env, relatedBug) : null
     const bugUrl = buildBugLink(env, bug)
+    const sourceMessageUrl = buildSourceMessageUrl(env, bug.source_guild_id, bug.source_channel_id, bug.source_message_id)
+    const followerCount = await countSubscriptions(env.DB, 'bug', bug.id)
     await client.editMessage(
       bug.channel_id,
       bug.message_id,
-      renderLegacyBugMessage(bug, { relatedBug, relatedBugUrl, bugUrl })
+      renderLegacyBugMessage(bug, { relatedBug, relatedBugUrl, bugUrl, sourceMessageUrl, followerCount })
     )
 
     const parentChannel = await client.getChannel(env.BUG_REPORT_CHANNEL_ID)
@@ -150,7 +195,18 @@ export async function syncFeatureMessage(env: Env, client: DiscordRestClient, fe
 
   try {
     const featureUrl = buildFeatureLink(env, feature)
-    await client.editMessage(feature.channel_id, feature.message_id, renderLegacyFeatureMessage(feature, { featureUrl }))
+    const sourceMessageUrl = buildSourceMessageUrl(
+      env,
+      feature.source_guild_id,
+      feature.source_channel_id,
+      feature.source_message_id
+    )
+    const followerCount = await countSubscriptions(env.DB, 'feature', feature.id)
+    await client.editMessage(
+      feature.channel_id,
+      feature.message_id,
+      renderLegacyFeatureMessage(feature, { featureUrl, sourceMessageUrl, followerCount })
+    )
 
     const parentChannel = await client.getChannel(env.FEATURE_CHANNEL_ID)
     if (isForumChannel(parentChannel.type)) {

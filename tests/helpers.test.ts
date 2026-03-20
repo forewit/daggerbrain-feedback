@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ComponentType, InteractionResponseType } from 'discord-api-types/v10'
+import { ComponentType, InteractionResponseType, MessageFlags } from 'discord-api-types/v10'
 import nacl from 'tweetnacl'
 import { buildApplicationCommands } from '../src/discord/commands'
 import {
@@ -138,7 +138,16 @@ describe('command helpers', () => {
 
   it('builds the full slash command set with typed shapes', () => {
     const commands = buildApplicationCommands(String(1n << 13n))
-    expect(commands.map((command) => command.name)).toEqual(['bug', 'feedback', 'topbugs', 'bug-status', 'bug-link'])
+    expect(commands.map((command) => command.name)).toEqual([
+      'bug',
+      'feedback',
+      'roadmap',
+      'topbugs',
+      'bug-status',
+      'bug-link',
+      'Report Message as Bug',
+      'Turn Message into Feedback'
+    ])
     expect(commands.find((command) => command.name === 'bug-status')?.default_member_permissions).toBe(String(1n << 13n))
   })
 })
@@ -199,7 +208,7 @@ describe('modal builders and parsers', () => {
 })
 
 describe('public message builders', () => {
-  it('renders a concise embed-first bug card', () => {
+  it('renders a component-driven bug card', () => {
     const rendered = renderBugMessage(
       {
         id: 1,
@@ -220,6 +229,9 @@ describe('public message builders', () => {
         regressions_count: 1,
         channel_id: '1',
         message_id: '2',
+        source_guild_id: 'guild-1',
+        source_channel_id: 'source-channel',
+        source_message_id: 'source-message',
         related_bug_id: 10,
         relationship_type: 'REGRESSION_OF',
         closed_reason: null,
@@ -234,19 +246,19 @@ describe('public message builders', () => {
       }
     )
 
-    expect(rendered.embeds?.[0]?.color).toBe(0x27ae60)
-    expect(rendered.embeds?.[0]?.image?.url).toBe('https://example.com/shot.png')
-    expect(rendered.components?.[0]?.type).toBe(ComponentType.ActionRow)
-
-    const buttons = (rendered.components?.[0] as { components: Array<{ label?: string; disabled?: boolean; url?: string }> }).components
+    expect(rendered.flags).toBe(MessageFlags.IsComponentsV2)
+    expect(rendered.components?.[0]?.type).toBe(ComponentType.Container)
+    const container = rendered.components?.[0] as { accent_color?: number; components: Array<{ type: number; components?: Array<{ label?: string; disabled?: boolean; url?: string }> }> }
+    expect(container.accent_color).toBe(0x27ae60)
+    const buttons = container.components.find((component) => component.type === ComponentType.ActionRow)?.components ?? []
     expect(buttons[0]?.label).toBe('Upvote')
     expect(buttons[0]?.disabled).toBe(true)
-    expect(buttons[1]?.url).toBe('https://example.com/dashboard#bug-1')
-    expect(buttons[2]?.label).toBe('Mark as Duplicate')
-    expect(buttons[2]?.disabled).toBe(true)
+    expect(buttons[1]?.label).toBe('Follow')
+    expect(buttons[2]?.url).toBe('https://example.com/dashboard#bug-1')
+    expect(buttons[3]?.label).toBe('Manage')
   })
 
-  it('renders a concise feature card', () => {
+  it('renders a component-driven feature card', () => {
     const rendered = renderFeatureMessage(
       {
         id: 3,
@@ -259,18 +271,24 @@ describe('public message builders', () => {
         votes_count: 5,
         channel_id: '1',
         message_id: '2',
+        source_guild_id: 'guild-1',
+        source_channel_id: 'source-channel',
+        source_message_id: 'source-message',
+        status_note: null,
         created_at: '2026-03-18T00:00:00Z',
         updated_at: '2026-03-18T00:00:00Z'
       },
       { featureUrl: 'https://discord.com/channels/1/2/3' }
     )
 
-    expect(rendered.embeds?.[0]?.color).toBe(0xf1c40f)
-    expect(rendered.embeds?.[0]?.title).toContain('Feedback #3')
-    expect(rendered.embeds?.[0]?.image?.url).toBe('https://example.com/mock.png')
-    const buttons = (rendered.components?.[0] as { components: Array<{ disabled?: boolean; url?: string }> }).components
+    expect(rendered.flags).toBe(MessageFlags.IsComponentsV2)
+    expect(rendered.components?.[0]?.type).toBe(ComponentType.Container)
+    const container = rendered.components?.[0] as { accent_color?: number; components: Array<{ type: number; components?: Array<{ disabled?: boolean; url?: string; label?: string }> }> }
+    expect(container.accent_color).toBe(0xf1c40f)
+    const buttons = container.components.find((component) => component.type === ComponentType.ActionRow)?.components ?? []
     expect(buttons[0]?.disabled).not.toBe(true)
-    expect(buttons[1]?.url).toBe('https://discord.com/channels/1/2/3')
+    expect(buttons[1]?.label).toBe('Follow')
+    expect(buttons[2]?.url).toBe('https://discord.com/channels/1/2/3')
   })
 })
 
@@ -296,6 +314,7 @@ describe('dashboard renderer', () => {
     const html = renderDashboardPage({
       currentBugFilter: 'all',
       currentFeedbackFilter: 'all',
+      canManage: true,
       bugs: [
         {
           id: 7,
@@ -308,10 +327,14 @@ describe('dashboard renderer', () => {
           duplicate_flags_count: 2,
           linked_duplicates_count: 3,
           regressions_count: 1,
+          source_guild_id: null,
+          source_channel_id: null,
+          source_message_id: null,
           related_bug_id: null,
           relationship_type: null,
           closed_reason: null,
           status_note: null,
+          follower_count: 0,
           created_at: '2026-03-18 15:00:00'
         }
       ],
@@ -324,6 +347,11 @@ describe('dashboard renderer', () => {
           reporter_id: 'user-456',
           votes_count: 5,
           screenshot_url: null,
+          source_guild_id: null,
+          source_channel_id: null,
+          source_message_id: null,
+          status_note: null,
+          follower_count: 0,
           created_at: '2026-03-16 09:00:00'
         }
       ]

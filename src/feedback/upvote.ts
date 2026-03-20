@@ -21,7 +21,7 @@ export async function upvoteFeature(db: D1Database, featureId: number, userId: s
     return { ok: false as const, message: 'Feedback not found.' }
   }
 
-  if (feature.status !== 'OPEN') {
+  if (!['OPEN', 'UNDER_REVIEW', 'PLANNED', 'IN_PROGRESS'].includes(feature.status)) {
     return { ok: false as const, message: 'Only open feedback can be upvoted.' }
   }
 

@@ -10,7 +10,8 @@ function getClosedReason(previousStatus: BugStatus, nextStatus: BugStatus): BugC
 export async function updateBugLifecycleStatus(
   db: D1Database,
   bugId: number,
-  nextStatus: BugStatus
+  nextStatus: BugStatus,
+  options?: { note?: string | null }
 ): Promise<
   | { ok: true; bugId: number; previousStatus: BugStatus; nextStatus: BugStatus }
   | { ok: false; message: string }
@@ -26,7 +27,7 @@ export async function updateBugLifecycleStatus(
 
   await updateBugStatus(db, bug.id, nextStatus, {
     closedReason: getClosedReason(bug.status, nextStatus),
-    statusNote: null
+    statusNote: options?.note ?? null
   })
 
   return { ok: true, bugId: bug.id, previousStatus: bug.status, nextStatus }

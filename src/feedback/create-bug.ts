@@ -13,6 +13,9 @@ interface CreateBugSubmissionInput {
   severity: BugSeverity | null
   description: string
   screenshot_url: string | null
+  source_guild_id?: string | null
+  source_channel_id?: string | null
+  source_message_id?: string | null
 }
 
 export async function createBugFromSubmission(
@@ -42,7 +45,10 @@ export async function createBugFromSubmission(
     related_bug_id: targetBug?.id ?? null,
     relationship_type: options?.relationshipType ?? null,
     closed_reason: options?.relationshipType === 'DUPLICATE_OF' ? 'DUPLICATE' : null,
-    status_note: null
+    status_note: null,
+    source_guild_id: input.source_guild_id ?? null,
+    source_channel_id: input.source_channel_id ?? null,
+    source_message_id: input.source_message_id ?? null
   })
 
   const bug = await getBugById(db, bugId)

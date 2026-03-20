@@ -4,10 +4,19 @@ export const CUSTOM_IDS = {
   preflightPrefix: 'bug:preflight:',
   duplicateSelectPrefix: 'bug:duplicate-select:',
   featureModal: 'feature:create',
+  featureModalPrefix: 'feature:create:',
   upvotePrefix: 'upvote:',
   duplicatePrefix: 'duplicate:',
   fixedPrefix: 'fixed:',
-  featureUpvotePrefix: 'feature:upvote:'
+  featureUpvotePrefix: 'feature:upvote:',
+  followPrefix: 'follow:',
+  unfollowPrefix: 'unfollow:',
+  featureFollowPrefix: 'feature:follow:',
+  featureUnfollowPrefix: 'feature:unfollow:',
+  manageBugPrefix: 'manage:bug:',
+  manageFeaturePrefix: 'manage:feature:',
+  bugStatusActionPrefix: 'bug:status-action:',
+  featureStatusActionPrefix: 'feature:status-action:'
 } as const
 
 export const BUG_MODAL_FIELDS = {

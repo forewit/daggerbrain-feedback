@@ -6,11 +6,13 @@ if (!baseUrl) {
 }
 
 const endpoint = `${baseUrl}/commands/register`
+const registerSecret = process.env.COMMANDS_REGISTER_SECRET?.trim()
 
 const response = await fetch(endpoint, {
   method: 'POST',
   headers: {
-    'content-type': 'application/json'
+    'content-type': 'application/json',
+    ...(registerSecret ? { 'x-register-secret': registerSecret } : {})
   }
 })
 
