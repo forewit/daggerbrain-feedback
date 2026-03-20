@@ -29,7 +29,7 @@ export async function createFeatureFromSubmission(
 
   const feature = await getFeatureById(db, featureId)
   if (!feature) {
-    return { ok: false, message: 'Feedback creation failed unexpectedly.' }
+    return { ok: false, message: 'Suggestion creation failed unexpectedly.' }
   }
 
   return { ok: true, feature }

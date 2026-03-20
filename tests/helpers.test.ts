@@ -140,15 +140,16 @@ describe('command helpers', () => {
     const commands = buildApplicationCommands(String(1n << 13n))
     expect(commands.map((command) => command.name)).toEqual([
       'bug',
-      'feedback',
-      'roadmap',
-      'topbugs',
-      'bug-status',
-      'bug-link',
+      'bugs',
+      'suggestion',
+      'suggestions',
       'Report Message as Bug',
-      'Turn Message into Feedback'
+      'Turn Message into Suggestion'
     ])
-    expect(commands.find((command) => command.name === 'bug-status')?.default_member_permissions).toBe(String(1n << 13n))
+    expect(commands.find((command) => command.name === 'bug')?.options).toBeUndefined()
+    expect(commands.find((command) => command.name === 'bugs')?.options?.length).toBeGreaterThan(0)
+    expect(commands.find((command) => command.name === 'suggestion')?.options).toBeUndefined()
+    expect(commands.find((command) => command.name === 'suggestions')?.options?.length).toBeGreaterThan(0)
   })
 })
 
@@ -253,7 +254,7 @@ describe('public message builders', () => {
     const buttons = container.components.find((component) => component.type === ComponentType.ActionRow)?.components ?? []
     expect(buttons[0]?.label).toBe('Upvote')
     expect(buttons[0]?.disabled).toBe(true)
-    expect(buttons[1]?.label).toBe('Follow')
+    expect(buttons[1]?.label).toBe('🔔 Follow')
     expect(buttons[2]?.url).toBe('https://example.com/dashboard#bug-1')
     expect(buttons[3]?.label).toBe('Manage')
   })
@@ -287,7 +288,7 @@ describe('public message builders', () => {
     expect(container.accent_color).toBe(0xf1c40f)
     const buttons = container.components.find((component) => component.type === ComponentType.ActionRow)?.components ?? []
     expect(buttons[0]?.disabled).not.toBe(true)
-    expect(buttons[1]?.label).toBe('Follow')
+    expect(buttons[1]?.label).toBe('🔔 Follow')
     expect(buttons[2]?.url).toBe('https://discord.com/channels/1/2/3')
   })
 })
@@ -313,7 +314,7 @@ describe('dashboard renderer', () => {
   it('renders the simplified admin tables with row actions', () => {
     const html = renderDashboardPage({
       currentBugFilter: 'all',
-      currentFeedbackFilter: 'all',
+      currentSuggestionFilter: 'all',
       canManage: true,
       bugs: [
         {

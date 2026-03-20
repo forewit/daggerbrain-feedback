@@ -1,7 +1,6 @@
 import { Hono } from 'hono'
-import { ChannelType, InteractionResponseType, type APIApplicationCommandAutocompleteInteraction, type APIApplicationCommandInteraction, type APIInteractionResponse, type APIMessageComponentInteraction, type APIModalSubmitInteraction } from 'discord-api-types/v10'
+import { InteractionResponseType, type APIApplicationCommandAutocompleteInteraction, type APIApplicationCommandInteraction, type APIInteractionResponse, type APIMessageComponentInteraction, type APIModalSubmitInteraction } from 'discord-api-types/v10'
 import { BUG_MODAL_FIELDS, FEATURE_MODAL_FIELDS } from './constants'
-import { createRoadmapPoll, listRoadmapPolls } from './db/roadmap-polls'
 import {
   createBugPreflightSession,
   deleteBug,
@@ -15,7 +14,6 @@ import {
 } from './db/bugs'
 import {
   deleteFeature,
-  findFeaturesByIds,
   getFeatureById,
   listFeatures,
   searchFeatures,
@@ -40,7 +38,6 @@ import {
   verifySignedSessionToken
 } from './discord/auth'
 import {
-  getCommandOptionAttachment,
   getCommandOptionInteger,
   getCommandOptionString,
   getFocusedAutocompleteOption,
@@ -79,7 +76,6 @@ import {
   featureManageResponse,
   featureModalResponse,
   myItemsResponse,
-  roadmapListResponse,
   silentComponentAck,
   topBugsResponse
 } from './discord/messages'
@@ -107,13 +103,13 @@ import {
 import { renderDashboardPage } from './ui/dashboard'
 
 type DashboardBugFilter = 'all' | 'open' | 'resolved'
-type DashboardFeedbackFilter = 'all' | 'open' | 'resolved'
+type DashboardSuggestionFilter = 'all' | 'open' | 'resolved'
 
 function getDashboardBugFilter(value: string | undefined): DashboardBugFilter {
   return value === 'open' || value === 'resolved' ? value : 'all'
 }
 
-function getDashboardFeedbackFilter(value: string | undefined): DashboardFeedbackFilter {
+function getDashboardSuggestionFilter(value: string | undefined): DashboardSuggestionFilter {
   return value === 'open' || value === 'resolved' ? value : 'all'
 }
 
@@ -123,16 +119,16 @@ function mapBugFilterToStatus(filter: DashboardBugFilter): 'all' | 'open' | 'clo
   return 'all'
 }
 
-function mapFeedbackFilterToStatus(filter: DashboardFeedbackFilter): 'all' | 'active' | 'resolved' {
+function mapSuggestionFilterToStatus(filter: DashboardSuggestionFilter): 'all' | 'active' | 'resolved' {
   if (filter === 'open') return 'active'
   if (filter === 'resolved') return 'resolved'
   return 'all'
 }
 
-function buildDashboardUrl(bugFilter: DashboardBugFilter, feedbackFilter: DashboardFeedbackFilter): string {
+function buildDashboardUrl(bugFilter: DashboardBugFilter, suggestionFilter: DashboardSuggestionFilter): string {
   const params = new URLSearchParams({
     bugStatus: bugFilter,
-    feedbackStatus: feedbackFilter
+    suggestionStatus: suggestionFilter
   })
 
   return `/dashboard?${params.toString()}`
@@ -171,30 +167,6 @@ function buildCreatedMessage(kind: string, id: number, messageUrl: string | null
   return url ? `${kind} #${id} is live: ${url}` : `${kind} #${id} is live.`
 }
 
-function getBugCommandDraft(interaction: APIApplicationCommandInteraction) {
-  const attachment = getCommandOptionAttachment(interaction, 'attachment')
-  return {
-    platform: null,
-    severity: null,
-    description: getCommandOptionString(interaction, 'description')?.trim() ?? '',
-    screenshot_url: attachment?.url ?? null,
-    source_guild_id: null,
-    source_channel_id: null,
-    source_message_id: null
-  }
-}
-
-function getFeatureCommandDraft(interaction: APIApplicationCommandInteraction) {
-  const attachment = getCommandOptionAttachment(interaction, 'attachment')
-  return {
-    description: getCommandOptionString(interaction, 'description')?.trim() ?? '',
-    screenshot_url: attachment?.url ?? null,
-    source_guild_id: null,
-    source_channel_id: null,
-    source_message_id: null
-  }
-}
-
 async function createFeatureSubmissionResponse(
   env: Env,
   client: DiscordRestClient,
@@ -217,7 +189,7 @@ async function createFeatureSubmissionResponse(
   try {
     const message = await createFeatureReportMessage(env, client, result.feature)
     await setFeatureMessageMetadata(env.DB, result.feature.id, message.channel_id, message.id)
-    return ephemeralMessage(buildCreatedMessage('Feedback', result.feature.id, buildDiscordMessageUrl(env, message.channel_id, message.id)))
+    return ephemeralMessage(buildCreatedMessage('Suggestion', result.feature.id, buildDiscordMessageUrl(env, message.channel_id, message.id)))
   } catch (error) {
     logDiscordApiError('discord.create_feature_message_failed', error, { featureId: result.feature.id })
     return ephemeralMessage(getCreateMessageFailureMessage('feature', error))
@@ -272,73 +244,28 @@ async function createBugSubmissionResponse(
   }
 }
 
-async function handleBugReportCommand(env: Env, client: DiscordRestClient, interaction: APIApplicationCommandInteraction): Promise<APIInteractionResponse> {
+async function handleBugReportCommand(env: Env, _client: DiscordRestClient, interaction: APIApplicationCommandInteraction): Promise<APIInteractionResponse> {
   const userId = getInteractionUserId(interaction)
   if (!userId) {
     return ephemeralMessage('Unable to determine the reporting user.')
   }
 
-  const draft = getBugCommandDraft(interaction)
-  const trimmedDescription = draft.description.trim()
-
-  if (!trimmedDescription) {
-    const sessionId = interaction.id
-    await createBugPreflightSession(env.DB, {
-      sessionId,
-      userId,
-      title: '',
-      titleNormalized: ''
-    })
-
-    return bugModalResponse({
-      sessionId,
-      initialDescription: '',
-      relationshipType: null,
-      targetBugId: null
-    })
-  }
-
-  const derivedTitle = deriveTitleFromDescription(trimmedDescription)
-  const sessionId = interaction.id
-
-  await createBugPreflightSession(env.DB, {
-    sessionId,
-    userId,
-    title: trimmedDescription,
-    titleNormalized: normalizeBugTitle(derivedTitle)
+  return bugModalResponse({
+    sessionId: interaction.id,
+    initialDescription: '',
+    relationshipType: null,
+    targetBugId: null
   })
-
-  const submission = bugSubmissionSchema.safeParse(draft)
-  if (!submission.success) {
-    return ephemeralMessage('Bug submission validation failed. Please add a description and keep it concise.')
-  }
-
-  const matches = await findSimilarBugs(env.DB, derivedTitle)
-  if (matches.duplicates.length === 0 && matches.regressions.length === 0) {
-    return createBugSubmissionResponse(env, client, userId, submission.data)
-  }
-
-  return bugPreflightResponse(sessionId, derivedTitle, matches.duplicates, matches.regressions)
 }
 
 async function handleFeatureReportCommand(
-  env: Env,
-  client: DiscordRestClient,
+  _env: Env,
+  _client: DiscordRestClient,
   interaction: APIApplicationCommandInteraction
 ): Promise<APIInteractionResponse> {
   const userId = getInteractionUserId(interaction)
   if (!userId) {
     return ephemeralMessage('Unable to determine the reporting user.')
-  }
-
-  const draft = getFeatureCommandDraft(interaction)
-  if (draft.description) {
-    const parsed = featureSubmissionSchema.safeParse(draft)
-    if (!parsed.success) {
-      return ephemeralMessage('Feedback validation failed.')
-    }
-
-    return createFeatureSubmissionResponse(env, client, userId, parsed.data)
   }
 
   return featureModalResponse('')
@@ -353,11 +280,11 @@ async function updateFeatureLifecycleStatus(
 ): Promise<{ ok: true; featureId: number; previousStatus: FeatureStatus; nextStatus: FeatureStatus } | { ok: false; message: string }> {
   const feature = await getFeatureById(env.DB, featureId)
   if (!feature) {
-    return { ok: false, message: 'Feedback not found.' }
+    return { ok: false, message: 'Suggestion not found.' }
   }
 
   if (feature.status === nextStatus && (feature.status_note ?? null) === (note ?? null)) {
-    return { ok: false, message: `Feedback #${feature.id} is already ${feature.status}.` }
+    return { ok: false, message: `Suggestion #${feature.id} is already ${feature.status}.` }
   }
 
   await updateFeatureStatus(env.DB, feature.id, nextStatus, { statusNote: note ?? null })
@@ -401,7 +328,7 @@ async function handleBugStatusCommand(env: Env, client: DiscordRestClient, inter
 
 async function handleFeatureStatusCommand(env: Env, client: DiscordRestClient, interaction: APIApplicationCommandInteraction): Promise<APIInteractionResponse> {
   if (!isModeratorInteraction(interaction, env)) {
-    return ephemeralMessage('You are not allowed to update feedback statuses.')
+    return ephemeralMessage('You are not allowed to update suggestion statuses.')
   }
 
   const parsed = featureStatusCommandSchema.safeParse({
@@ -411,7 +338,7 @@ async function handleFeatureStatusCommand(env: Env, client: DiscordRestClient, i
   })
 
   if (!parsed.success) {
-    return ephemeralMessage('Invalid feedback status command.')
+    return ephemeralMessage('Invalid suggestion status command.')
   }
 
   const result = await updateFeatureLifecycleStatus(env, client, parsed.data.featureId, parsed.data.status, parsed.data.note ?? null)
@@ -419,7 +346,7 @@ async function handleFeatureStatusCommand(env: Env, client: DiscordRestClient, i
     return ephemeralMessage(result.message)
   }
 
-  return ephemeralMessage(`Feedback #${result.featureId} is now ${result.nextStatus}.`)
+  return ephemeralMessage(`Suggestion #${result.featureId} is now ${result.nextStatus}.`)
 }
 
 async function handleBugLinkCommand(env: Env, client: DiscordRestClient, interaction: APIApplicationCommandInteraction): Promise<APIInteractionResponse> {
@@ -458,95 +385,6 @@ async function handleBugLinkCommand(env: Env, client: DiscordRestClient, interac
   return ephemeralMessage(`Linked bug #${result.bugId} to bug #${result.targetBugId} as a regression.`)
 }
 
-async function createRoadmapPollPost(env: Env, client: DiscordRestClient, title: string, featureIds: number[], createdBy: string): Promise<string> {
-  const features = await findFeaturesByIds(env.DB, featureIds)
-  if (features.length < 2) {
-    throw new Error('You need at least two valid features to create a roadmap poll.')
-  }
-
-  const poll = {
-    question: { text: title },
-    answers: features.slice(0, 5).map((feature) => ({ poll_media: { text: `#${feature.id} ${feature.title}` } })),
-    duration: 24,
-    allow_multiselect: false
-  }
-
-  const channel = await client.getChannel(env.FEATURE_CHANNEL_ID)
-  if (channel.type === ChannelType.GuildForum || channel.type === ChannelType.GuildMedia) {
-    const thread = await client.createForumThread(channel.id, {
-      name: title,
-      message: {
-        content: 'Roadmap poll thread'
-      }
-    })
-
-    const message = await client.createMessage(thread.channel_id, {
-      content: 'Community roadmap prioritization poll',
-      poll
-    })
-
-    await createRoadmapPoll(env.DB, {
-      title,
-      channelId: thread.channel_id,
-      messageId: message.id,
-      featureIds: features.map((feature) => feature.id),
-      createdBy
-    })
-
-    return buildDiscordMessageUrl(env, thread.channel_id, message.id) ?? 'Poll created.'
-  }
-
-  const message = await client.createMessage(channel.id, {
-    content: 'Community roadmap prioritization poll',
-    poll
-  })
-
-  await createRoadmapPoll(env.DB, {
-    title,
-    channelId: message.channel_id,
-    messageId: message.id,
-    featureIds: features.map((feature) => feature.id),
-    createdBy
-  })
-
-  return buildDiscordMessageUrl(env, message.channel_id, message.id) ?? 'Poll created.'
-}
-
-async function handleRoadmapCommand(env: Env, client: DiscordRestClient, interaction: APIApplicationCommandInteraction): Promise<APIInteractionResponse> {
-  const userId = getInteractionUserId(interaction)
-  if (!userId) {
-    return ephemeralMessage('Unable to determine the acting user.')
-  }
-
-  const path = getCommandPath(interaction)
-  if (path[1] === 'poll') {
-    if (!isModeratorInteraction(interaction, env)) {
-      return ephemeralMessage('You are not allowed to create roadmap polls.')
-    }
-
-    const title = getCommandOptionString(interaction, 'title')?.trim() ?? ''
-    const featureIds = Array.from({ length: 5 }, (_, index) => getCommandOptionInteger(interaction, `feature_${index + 1}`)).filter(
-      (value): value is number => typeof value === 'number' && value > 0
-    )
-
-    if (!title || featureIds.length < 2) {
-      return ephemeralMessage('Provide a title and at least two roadmap items.')
-    }
-
-    try {
-      const url = await createRoadmapPollPost(env, client, title, featureIds, userId)
-      return ephemeralMessage(`Roadmap poll created: ${url}`)
-    } catch (error) {
-      console.error('roadmap.poll_failed', error)
-      return ephemeralMessage('Unable to create the roadmap poll.')
-    }
-  }
-
-  const features = await listFeatures(env.DB, { status: 'all', sort: 'top', limit: 8 })
-  const roadmap = features.filter((feature) => ['PLANNED', 'IN_PROGRESS', 'SHIPPED'].includes(feature.status))
-  return roadmapListResponse(roadmap)
-}
-
 async function handleMessageCommand(env: Env, interaction: APIApplicationCommandInteraction): Promise<APIInteractionResponse> {
   const userId = getInteractionUserId(interaction)
   if (!userId) {
@@ -567,6 +405,9 @@ async function handleMessageCommand(env: Env, interaction: APIApplicationCommand
       userId,
       title: target.content,
       titleNormalized: normalizeBugTitle(deriveTitleFromDescription(target.content)),
+      platform: null,
+      severity: null,
+      screenshotUrl: target.attachmentUrl,
       sourceGuildId: guildId,
       sourceChannelId: channelId,
       sourceMessageId: target.messageId
@@ -594,19 +435,11 @@ async function handleCommand(env: Env, client: DiscordRestClient, interaction: A
 
   const path = getCommandPath(interaction)
 
-  if (interaction.data.name === 'topbugs') {
-    return topBugsResponse(await listBugs(env.DB, 'open', 'top', { limit: 5 }))
-  }
-
-  if (interaction.data.name === 'bug-status') {
-    return handleBugStatusCommand(env, client, interaction)
-  }
-
-  if (interaction.data.name === 'bug-link') {
-    return handleBugLinkCommand(env, client, interaction)
-  }
-
   if (path[0] === 'bug') {
+    return handleBugReportCommand(env, client, interaction)
+  }
+
+  if (path[0] === 'bugs') {
     if (path[1] === 'top') {
       return topBugsResponse(await listBugs(env.DB, 'open', 'top', { limit: 5 }))
     }
@@ -625,29 +458,29 @@ async function handleCommand(env: Env, client: DiscordRestClient, interaction: A
       return handleBugLinkCommand(env, client, interaction)
     }
 
-    return handleBugReportCommand(env, client, interaction)
+    return ephemeralMessage('Unknown command.')
   }
 
-  if (path[0] === 'feedback') {
+  if (path[0] === 'suggestion') {
+    return handleFeatureReportCommand(env, client, interaction)
+  }
+
+  if (path[0] === 'suggestions' || path[0] === 'feedback') {
     if (path[1] === 'top') {
-      return myItemsResponse('feedback', await listFeatures(env.DB, { status: 'active', sort: 'top', limit: 5 }))
+      return myItemsResponse('suggestion', await listFeatures(env.DB, { status: 'active', sort: 'top', limit: 5 }))
     }
 
     if (path[1] === 'mine') {
       const userId = getInteractionUserId(interaction)
       if (!userId) return ephemeralMessage('Unable to determine the acting user.')
-      return myItemsResponse('feedback', await listFeatures(env.DB, { status: 'all', sort: 'newest', reporterId: userId, limit: 5 }))
+      return myItemsResponse('suggestion', await listFeatures(env.DB, { status: 'all', sort: 'newest', reporterId: userId, limit: 5 }))
     }
 
     if (path[1] === 'status') {
       return handleFeatureStatusCommand(env, client, interaction)
     }
 
-    return handleFeatureReportCommand(env, client, interaction)
-  }
-
-  if (path[0] === 'roadmap') {
-    return handleRoadmapCommand(env, client, interaction)
+    return ephemeralMessage('Unknown command.')
   }
 
   return ephemeralMessage('Unknown command.')
@@ -670,7 +503,7 @@ async function handleAutocomplete(env: Env, interaction: APIApplicationCommandAu
   const query = String(focused.value ?? '').trim()
 
   if (focused.name === 'status') {
-    const statuses = path[0] === 'feedback'
+    const statuses = path[0] === 'suggestions' || path[0] === 'feedback'
       ? ['OPEN', 'UNDER_REVIEW', 'PLANNED', 'IN_PROGRESS', 'SHIPPED', 'DECLINED', 'CLOSED']
       : ['OPEN', 'ACKNOWLEDGED', 'IN_PROGRESS', 'FIXED', 'CLOSED', 'DUPLICATE']
 
@@ -729,7 +562,7 @@ async function handleModalSubmit(env: Env, client: DiscordRestClient, interactio
     })
 
     if (!parsed.success) {
-      return ephemeralMessage('Feedback validation failed.')
+      return ephemeralMessage('Suggestion validation failed.')
     }
 
     const userId = getInteractionUserId(interaction)
@@ -751,9 +584,6 @@ async function handleModalSubmit(env: Env, client: DiscordRestClient, interactio
   }
 
   const preflightSession = modalState.sessionId ? await getBugPreflightSession(env.DB, modalState.sessionId, userId) : null
-  if (modalState.sessionId && !preflightSession) {
-    return ephemeralMessage('That report draft expired. Please run /bug again.')
-  }
 
   const modalValues = getModalFieldValues(interaction)
   if (typeof modalValues.description === 'string' && !modalValues.description.trim() && preflightSession?.title) {
@@ -772,6 +602,27 @@ async function handleModalSubmit(env: Env, client: DiscordRestClient, interactio
 
   if (!parsed.success) {
     return ephemeralMessage('Bug submission validation failed. Please add a description and keep it concise.')
+  }
+
+  if (!modalState.relationshipType && !modalState.targetBugId) {
+    const derivedTitle = deriveTitleFromDescription(parsed.data.description)
+    await createBugPreflightSession(env.DB, {
+      sessionId: modalState.sessionId ?? interaction.id,
+      userId,
+      title: parsed.data.description,
+      titleNormalized: normalizeBugTitle(derivedTitle),
+      platform: parsed.data.platform,
+      severity: parsed.data.severity,
+      screenshotUrl: parsed.data.screenshot_url,
+      sourceGuildId: preflightSession?.source_guild_id ?? null,
+      sourceChannelId: preflightSession?.source_channel_id ?? null,
+      sourceMessageId: preflightSession?.source_message_id ?? null
+    })
+
+    const matches = await findSimilarBugs(env.DB, derivedTitle)
+    if (matches.duplicates.length > 0 || matches.regressions.length > 0) {
+      return bugPreflightResponse(modalState.sessionId ?? interaction.id, derivedTitle, matches.duplicates, matches.regressions)
+    }
   }
 
   return createBugSubmissionResponse(env, client, userId, parsed.data, {
@@ -793,12 +644,24 @@ async function handleComponent(env: Env, client: DiscordRestClient, interaction:
       return ephemeralMessage('That report draft expired. Please run /bug again.')
     }
 
-    return bugModalResponse({
-      sessionId: session.session_id,
-      initialDescription: session.title,
-      relationshipType: preflightAction.relationshipType,
-      targetBugId: preflightAction.targetBugId
-    })
+    return createBugSubmissionResponse(
+      env,
+      client,
+      userId,
+      {
+        platform: session.platform,
+        severity: session.severity,
+        description: session.title,
+        screenshot_url: session.screenshot_url,
+        source_guild_id: session.source_guild_id,
+        source_channel_id: session.source_channel_id,
+        source_message_id: session.source_message_id
+      },
+      {
+        relationshipType: preflightAction.relationshipType,
+        targetBugId: preflightAction.targetBugId
+      }
+    )
   }
 
   const duplicateSelection = parseDuplicateSelectionCustomId(interaction.data.custom_id)
@@ -840,8 +703,8 @@ async function handleComponent(env: Env, client: DiscordRestClient, interaction:
 
     return ephemeralMessage(
       currentlySubscribed
-        ? `You will no longer receive updates for ${subscriptionAction.itemKind} #${subscriptionAction.itemId}.`
-        : `You are now following ${subscriptionAction.itemKind} #${subscriptionAction.itemId}.`
+        ? `You will no longer receive updates for ${subscriptionAction.itemKind === 'feature' ? 'suggestion' : 'bug'} #${subscriptionAction.itemId}.`
+        : `You are now following ${subscriptionAction.itemKind === 'feature' ? 'suggestion' : 'bug'} #${subscriptionAction.itemId}.`
     )
   }
 
@@ -857,7 +720,7 @@ async function handleComponent(env: Env, client: DiscordRestClient, interaction:
     }
 
     const feature = await getFeatureById(env.DB, manageAction.itemId)
-    return feature ? featureManageResponse(feature) : ephemeralMessage('Feedback not found.')
+    return feature ? featureManageResponse(feature) : ephemeralMessage('Suggestion not found.')
   }
 
   const statusAction = parseStatusAction(interaction.data.custom_id)
@@ -881,7 +744,7 @@ async function handleComponent(env: Env, client: DiscordRestClient, interaction:
     }
 
     const result = await updateFeatureLifecycleStatus(env, client, statusAction.itemId, statusAction.status as FeatureStatus)
-    return result.ok ? ephemeralMessage(`Feedback #${result.featureId} is now ${result.nextStatus}.`) : ephemeralMessage(result.message)
+    return result.ok ? ephemeralMessage(`Suggestion #${result.featureId} is now ${result.nextStatus}.`) : ephemeralMessage(result.message)
   }
 
   const featureVote = parseFeatureUpvote(interaction.data.custom_id)
@@ -954,7 +817,7 @@ async function handleDashboardBugAction(env: Env, client: DiscordRestClient, bug
 async function handleDashboardFeedbackAction(env: Env, client: DiscordRestClient, featureId: number, action: string) {
   const feature = await getFeatureById(env.DB, featureId)
   if (!feature) {
-    return { ok: false as const, message: 'Feedback not found.' }
+    return { ok: false as const, message: 'Suggestion not found.' }
   }
 
   if (action === 'resolve') {
@@ -982,7 +845,7 @@ async function handleDashboardFeedbackAction(env: Env, client: DiscordRestClient
     return { ok: true as const }
   }
 
-  return { ok: false as const, message: 'Unsupported feedback action.' }
+  return { ok: false as const, message: 'Unsupported suggestion action.' }
 }
 
 export function createApp() {
@@ -1066,22 +929,21 @@ export function createApp() {
     return c.json({ features: await listFeatures(c.env.DB, { status, sort, limit: 50 }) })
   })
 
-  app.get('/api/roadmap', async (c) => {
-    const features = await listFeatures(c.env.DB, { status: 'all', sort: 'top', limit: 50 })
-    const roadmap = features.filter((feature) => ['PLANNED', 'IN_PROGRESS', 'SHIPPED'].includes(feature.status))
-    const polls = await listRoadmapPolls(c.env.DB, 5)
-    return c.json({ roadmap, polls })
+  app.get('/api/suggestions', async (c) => {
+    const status = c.req.query('status') === 'resolved' ? 'resolved' : c.req.query('status') === 'all' ? 'all' : 'active'
+    const sort = c.req.query('sort') === 'newest' ? 'newest' : 'top'
+    return c.json({ suggestions: await listFeatures(c.env.DB, { status, sort, limit: 50 }) })
   })
 
   app.get('/dashboard', async (c) => {
     const bugFilter = getDashboardBugFilter(c.req.query('bugStatus'))
-    const feedbackFilter = getDashboardFeedbackFilter(c.req.query('feedbackStatus'))
+    const suggestionFilter = getDashboardSuggestionFilter(c.req.query('suggestionStatus') ?? c.req.query('feedbackStatus'))
     const client = new DiscordRestClient(c.env)
     const canManage = await canManageDashboard(c.env, client, c.req.header('Cookie') ?? null)
 
     const [rawBugs, rawFeatures] = await Promise.all([
       listBugs(c.env.DB, mapBugFilterToStatus(bugFilter), 'newest'),
-      listFeatures(c.env.DB, { status: mapFeedbackFilterToStatus(feedbackFilter), sort: 'newest', limit: 200 })
+      listFeatures(c.env.DB, { status: mapSuggestionFilterToStatus(suggestionFilter), sort: 'newest', limit: 200 })
     ])
 
     const bugs = rawBugs.map((bug) => ({
@@ -1107,7 +969,7 @@ export function createApp() {
         bugs,
         features,
         currentBugFilter: bugFilter,
-        currentFeedbackFilter: feedbackFilter,
+        currentSuggestionFilter: suggestionFilter,
         canManage,
         authUrl: c.env.COOKIE_SECRET && c.env.DISCORD_CLIENT_SECRET && c.env.PUBLIC_APP_URL ? '/auth/discord/start' : null,
         logoutUrl: canManage ? '/auth/logout' : null
@@ -1127,16 +989,18 @@ export function createApp() {
     const action = String(formData.get('action') ?? '')
     const id = Number(formData.get('id') ?? 0)
     const bugFilter = getDashboardBugFilter(String(formData.get('bugStatus') ?? 'all'))
-    const feedbackFilter = getDashboardFeedbackFilter(String(formData.get('feedbackStatus') ?? 'all'))
+    const suggestionFilter = getDashboardSuggestionFilter(
+      String(formData.get('suggestionStatus') ?? formData.get('feedbackStatus') ?? 'all')
+    )
 
     if (!Number.isInteger(id) || id <= 0) {
-      return c.redirect(buildDashboardUrl(bugFilter, feedbackFilter))
+      return c.redirect(buildDashboardUrl(bugFilter, suggestionFilter))
     }
 
     const result =
       kind === 'bug'
         ? await handleDashboardBugAction(c.env, client, id, action)
-        : kind === 'feedback'
+        : kind === 'feedback' || kind === 'suggestion'
           ? await handleDashboardFeedbackAction(c.env, client, id, action)
           : { ok: false as const, message: 'Unsupported dashboard action.' }
 
@@ -1144,7 +1008,7 @@ export function createApp() {
       console.error('dashboard.action_failed', { kind, action, id, message: result.message })
     }
 
-    return c.redirect(buildDashboardUrl(bugFilter, feedbackFilter))
+    return c.redirect(buildDashboardUrl(bugFilter, suggestionFilter))
   })
 
   app.post('/interactions', async (c) => {

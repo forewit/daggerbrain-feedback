@@ -3,7 +3,6 @@ import {
   ComponentType,
   InteractionResponseType,
   MessageFlags,
-  SeparatorSpacingSize,
   TextInputStyle,
   type APIActionRowComponent,
   type APIButtonComponentWithCustomId,
@@ -14,13 +13,11 @@ import {
   type APIInteractionResponseChannelMessageWithSource,
   type APIInteractionResponseDeferredMessageUpdate,
   type APILabelComponent,
-  type APIMediaGalleryComponent,
   type APIModalInteractionResponse,
   type APIModalInteractionResponseCallbackComponent,
   type APISectionComponent,
   type APIThumbnailComponent,
   type APISelectMenuOption,
-  type APISeparatorComponent,
   type APIStringSelectComponent,
   type APITextDisplayComponent,
   type APITextInputComponent,
@@ -65,7 +62,7 @@ const bugStatusMeta = {
   DUPLICATE: { label: 'Duplicate', emoji: EMOJI.duplicate, color: 0x7f8c8d }
 } as const
 
-const feedbackStatusMeta = {
+const suggestionStatusMeta = {
   OPEN: { label: 'Open', emoji: EMOJI.open, color: 0xf1c40f },
   UNDER_REVIEW: { label: 'Under Review', emoji: EMOJI.review, color: 0x3498db },
   PLANNED: { label: 'Planned', emoji: EMOJI.planned, color: 0x2980b9 },
@@ -201,10 +198,6 @@ function textDisplay(content: string): APITextDisplayComponent {
   return { type: ComponentType.TextDisplay, content }
 }
 
-function separator(): APISeparatorComponent {
-  return { type: ComponentType.Separator, divider: true, spacing: SeparatorSpacingSize.Small }
-}
-
 function bugStatusActionCustomId(bugId: number, status: string): string {
   return `${CUSTOM_IDS.bugStatusActionPrefix}${bugId}:${status}`
 }
@@ -225,14 +218,6 @@ function itemCardActionRow(buttons: MessageButton[]): ButtonRow {
   return {
     type: ComponentType.ActionRow,
     components: buttons.slice(0, 5)
-  }
-}
-
-function maybeMediaGallery(url: string | null, description: string): APIMediaGalleryComponent | null {
-  if (!url) return null
-  return {
-    type: ComponentType.MediaGallery,
-    items: [{ media: { url }, description }]
   }
 }
 
@@ -314,7 +299,7 @@ export function featureModalResponse(
     fileUpload(FEATURE_MODAL_FIELDS.screenshot, 'Mockup or screenshot', 'Optional. Sketches and references are great.'),
     paragraphTextInput(FEATURE_MODAL_FIELDS.description, 'Description', {
       value: initialDescription,
-      placeholder: 'Describe the feedback or idea you want to share.',
+      placeholder: 'Describe the suggestion or idea you want to share.',
       required: true,
       maxLength: 1000
     })
@@ -328,7 +313,7 @@ export function featureModalResponse(
         options?.sourceChannelId ?? null,
         options?.sourceMessageId ?? null
       ),
-      title: 'Share feedback',
+      title: 'Share a suggestion',
       components
     }
   }
@@ -392,9 +377,9 @@ export function topBugsResponse(bugs: BugSummary[]): APIInteractionResponse {
   return ephemeralMessage(content)
 }
 
-export function myItemsResponse(kind: 'bug' | 'feedback', items: Array<BugSummary | FeatureSummary>): APIInteractionResponse {
+export function myItemsResponse(kind: 'bug' | 'suggestion', items: Array<BugSummary | FeatureSummary>): APIInteractionResponse {
   if (items.length === 0) {
-    return ephemeralMessage(`You have not created any ${kind === 'bug' ? 'bugs' : 'feedback'} yet.`)
+    return ephemeralMessage(`You have not created any ${kind === 'bug' ? 'bugs' : 'suggestions'} yet.`)
   }
 
   const content = items
@@ -403,19 +388,6 @@ export function myItemsResponse(kind: 'bug' | 'feedback', items: Array<BugSummar
     .join('\n')
 
   return ephemeralMessage(content)
-}
-
-export function roadmapListResponse(features: FeatureSummary[]): APIInteractionResponse {
-  if (features.length === 0) {
-    return ephemeralMessage('No roadmap items are currently planned or in progress.')
-  }
-
-  return ephemeralMessage(
-    features
-      .slice(0, 8)
-      .map((feature) => `- ${EMOJI.feedback} #${feature.id} ${feature.title} (${feature.status})`)
-      .join('\n')
-  )
 }
 
 export function bugManageResponse(bug: BugRecord): APIInteractionResponse {
@@ -481,72 +453,53 @@ export function featureManageResponse(feature: FeatureRecord): APIInteractionRes
     )
   ]
 
-  return ephemeralMessage(`Manage feedback #${feature.id}`, buttonRows(buttons))
+  return ephemeralMessage(`Manage suggestion #${feature.id}`, buttonRows(buttons))
 }
 
-function buildBugSummaryLines(
+function joinCompactParts(parts: Array<string | null | undefined>): string | null {
+  const compact = parts.map((part) => part?.trim()).filter(Boolean) as string[]
+  return compact.length > 0 ? compact.join(' • ') : null
+}
+
+function buildBugSummaryText(
   bug: BugRecord,
   followerCount: number,
   options?: { relatedBugUrl?: string | null; sourceMessageUrl?: string | null }
-): string[] {
+): string {
   const status = bugStatusMeta[bug.status]
   const lines = [
-    `${status.emoji} **${status.label}**`,
-    `${EMOJI.upvotes} **${bug.votes_count}** upvotes`,
-    `${EMOJI.follow} **${followerCount}** followers`,
-    `Reporter: <@${bug.reporter_id}>`
+    joinCompactParts([`${status.emoji} **${status.label}**`, `${EMOJI.upvotes} **${bug.votes_count}**`, `${EMOJI.follow} **${followerCount}**`]),
+    joinCompactParts([
+      `Reporter: <@${bug.reporter_id}>`,
+      bug.platform ? `Platform: ${bugPlatformLabels[bug.platform] ?? bug.platform}` : null,
+      bug.severity ? `Severity: ${bugSeverityLabels[bug.severity] ?? bug.severity}` : null
+    ]),
+    bug.status_note ? `Note: ${bug.status_note}` : null,
+    bug.status === 'DUPLICATE' && options?.relatedBugUrl && bug.related_bug_id
+      ? `Tracking under [bug #${bug.related_bug_id}](${options.relatedBugUrl})`
+      : null,
+    sourceMessageLabel(options?.sourceMessageUrl ?? null)
   ]
 
-  if (bug.platform) {
-    lines.push(`Platform: ${bugPlatformLabels[bug.platform] ?? bug.platform}`)
-  }
-
-  if (bug.severity) {
-    lines.push(`Severity: ${bugSeverityLabels[bug.severity] ?? bug.severity}`)
-  }
-
-  if (bug.status_note) {
-    lines.push(`Note: ${bug.status_note}`)
-  }
-
-  if (bug.status === 'DUPLICATE' && options?.relatedBugUrl && bug.related_bug_id) {
-    lines.push(`Tracking under [bug #${bug.related_bug_id}](${options.relatedBugUrl})`)
-  }
-
-  const source = sourceMessageLabel(options?.sourceMessageUrl ?? null)
-  if (source) {
-    lines.push(source)
-  }
-
-  return lines
+  return lines.filter(Boolean).join('\n')
 }
 
-function buildFeatureSummaryLines(feature: FeatureRecord, followerCount: number, options?: { sourceMessageUrl?: string | null }): string[] {
-  const status = feedbackStatusMeta[feature.status]
+function buildFeatureSummaryText(feature: FeatureRecord, followerCount: number, options?: { sourceMessageUrl?: string | null }): string {
+  const status = suggestionStatusMeta[feature.status]
   const lines = [
-    `${status.emoji} **${status.label}**`,
-    `${EMOJI.upvotes} **${feature.votes_count}** upvotes`,
-    `${EMOJI.follow} **${followerCount}** followers`,
-    `Reporter: <@${feature.reporter_id}>`
+    joinCompactParts([`${status.emoji} **${status.label}**`, `${EMOJI.upvotes} **${feature.votes_count}**`, `${EMOJI.follow} **${followerCount}**`]),
+    joinCompactParts([`Reporter: <@${feature.reporter_id}>`, sourceMessageLabel(options?.sourceMessageUrl ?? null)]),
+    feature.status_note ? `Note: ${feature.status_note}` : null
   ]
 
-  if (feature.status_note) {
-    lines.push(`Note: ${feature.status_note}`)
-  }
-
-  const source = sourceMessageLabel(options?.sourceMessageUrl ?? null)
-  if (source) {
-    lines.push(source)
-  }
-
-  return lines
+  return lines.filter(Boolean).join('\n')
 }
 
 function buildBugActionRow(bug: BugRecord, bugUrl: string | null): ButtonRow {
   const isClosed = bug.status === 'FIXED' || bug.status === 'CLOSED' || bug.status === 'DUPLICATE'
   const buttons: MessageButton[] = [
     button(`${CUSTOM_IDS.upvotePrefix}${bug.id}`, 'Upvote', ButtonStyle.Primary, isClosed),
-    button(`${CUSTOM_IDS.followPrefix}${bug.id}`, 'Follow', ButtonStyle.Secondary),
+    button(`${CUSTOM_IDS.followPrefix}${bug.id}`, `${EMOJI.follow} Follow`, ButtonStyle.Secondary),
     ...(bugUrl ? [linkButton('Open Card', bugUrl)] : []),
     button(bugManageCustomId(bug.id), 'Manage', ButtonStyle.Secondary)
   ]
@@ -557,7 +510,7 @@ function buildBugActionRow(bug: BugRecord, bugUrl: string | null): ButtonRow {
 function buildFeatureActionRow(feature: FeatureRecord, featureUrl: string | null): ButtonRow {
   const buttons: MessageButton[] = [
     button(`${CUSTOM_IDS.featureUpvotePrefix}${feature.id}`, 'Upvote', ButtonStyle.Primary, feature.status !== 'OPEN'),
-    button(`${CUSTOM_IDS.featureFollowPrefix}${feature.id}`, 'Follow', ButtonStyle.Secondary),
+    button(`${CUSTOM_IDS.featureFollowPrefix}${feature.id}`, `${EMOJI.follow} Follow`, ButtonStyle.Secondary),
     ...(featureUrl ? [linkButton('Open Card', featureUrl)] : []),
     button(featureManageCustomId(feature.id), 'Manage', ButtonStyle.Secondary)
   ]
@@ -578,10 +531,10 @@ function bugCardComponents(
   const status = bugStatusMeta[bug.status]
   const title = `#${bug.id} ${truncate(bug.title, 140)}`
   const summary = compactValue(bug.description) ?? 'No additional details provided.'
-  const summaryLines = buildBugSummaryLines(bug, followerCount, {
+  const summaryText = buildBugSummaryText(bug, followerCount, {
     relatedBugUrl: options?.relatedBugUrl ?? null,
     sourceMessageUrl: options?.sourceMessageUrl ?? null
-  }).join('\n')
+  })
 
   const sectionAccessory = bug.screenshot_url
     ? ({ type: ComponentType.Thumbnail, media: { url: bug.screenshot_url }, description: 'Bug screenshot' } satisfies APIThumbnailComponent)
@@ -591,16 +544,12 @@ function bugCardComponents(
 
   const section: APISectionComponent = {
     type: ComponentType.Section,
-    components: [textDisplay(`## ${EMOJI.bug} ${title}`), textDisplay(truncate(summary, 500))],
+    components: [textDisplay(`## ${EMOJI.bug} ${title}`), textDisplay(truncate(summary, 500)), textDisplay(summaryText)],
     accessory: sectionAccessory
   }
 
-  const gallery = maybeMediaGallery(bug.screenshot_url, 'Bug screenshot')
   const components = [
     section,
-    separator(),
-    textDisplay(summaryLines),
-    ...(gallery ? [gallery] : []),
     buildBugActionRow(bug, options?.bugUrl ?? null)
   ]
 
@@ -618,29 +567,25 @@ function featureCardComponents(
   followerCount: number,
   options?: { featureUrl?: string | null; sourceMessageUrl?: string | null }
 ): APIContainerComponent[] {
-  const status = feedbackStatusMeta[feature.status]
+  const status = suggestionStatusMeta[feature.status]
   const title = `#${feature.id} ${truncate(feature.title, 140)}`
   const summary = compactValue(feature.description) ?? 'No additional details provided.'
-  const summaryLines = buildFeatureSummaryLines(feature, followerCount, { sourceMessageUrl: options?.sourceMessageUrl ?? null }).join('\n')
+  const summaryText = buildFeatureSummaryText(feature, followerCount, { sourceMessageUrl: options?.sourceMessageUrl ?? null })
 
   const sectionAccessory = feature.screenshot_url
-    ? ({ type: ComponentType.Thumbnail, media: { url: feature.screenshot_url }, description: 'Feedback screenshot' } satisfies APIThumbnailComponent)
+    ? ({ type: ComponentType.Thumbnail, media: { url: feature.screenshot_url }, description: 'Suggestion screenshot' } satisfies APIThumbnailComponent)
     : (options?.featureUrl
         ? linkButton('Open Card', options.featureUrl)
         : button(featureManageCustomId(feature.id, 'section'), 'Manage', ButtonStyle.Secondary))
 
   const section: APISectionComponent = {
     type: ComponentType.Section,
-    components: [textDisplay(`## ${EMOJI.feedback} ${title}`), textDisplay(truncate(summary, 500))],
+    components: [textDisplay(`## ${EMOJI.feedback} ${title}`), textDisplay(truncate(summary, 500)), textDisplay(summaryText)],
     accessory: sectionAccessory
   }
 
-  const gallery = maybeMediaGallery(feature.screenshot_url, 'Feedback screenshot')
   const components = [
     section,
-    separator(),
-    textDisplay(summaryLines),
-    ...(gallery ? [gallery] : []),
     buildFeatureActionRow(feature, options?.featureUrl ?? null)
   ]
 

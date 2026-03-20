@@ -43,7 +43,7 @@ export async function notifyFeatureFollowers(
 ): Promise<void> {
   const subscriptions = await listSubscriptionsForItem(env.DB, 'feature', feature.id)
   const recipients = uniqueUserIds([feature.reporter_id, ...subscriptions.map((subscription) => subscription.user_id)])
-  const content = `Feedback #${feature.id} is now ${feature.status}.${feature.status_note ? `\nNote: ${feature.status_note}` : ''}`
+  const content = `Suggestion #${feature.id} is now ${feature.status}.${feature.status_note ? `\nNote: ${feature.status_note}` : ''}`
 
   await Promise.all(
     recipients.map(async (userId) => {

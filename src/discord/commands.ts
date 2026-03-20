@@ -8,24 +8,6 @@ import {
   type RESTPutAPIApplicationCommandsJSONBody
 } from 'discord-api-types/v10'
 
-function attachmentOption(name: string, description: string): APIApplicationCommandBasicOption {
-  return {
-    type: ApplicationCommandOptionType.Attachment,
-    name,
-    description,
-    required: false
-  }
-}
-
-function descriptionOption(kind: string): APIApplicationCommandBasicOption {
-  return {
-    type: ApplicationCommandOptionType.String,
-    name: 'description',
-    description: `Describe the ${kind}`,
-    required: false
-  }
-}
-
 function bugIdOption(name: string, description: string): APIApplicationCommandBasicOption {
   return {
     type: ApplicationCommandOptionType.Integer,
@@ -46,14 +28,8 @@ function featureIdOption(name: string, description: string): APIApplicationComma
   }
 }
 
-function bugSubcommands(): APIApplicationCommandOption[] {
+function bugsSubcommands(): APIApplicationCommandOption[] {
   return [
-    {
-      type: ApplicationCommandOptionType.Subcommand,
-      name: 'report',
-      description: 'Report a bug',
-      options: [descriptionOption('bug'), attachmentOption('attachment', 'Optional screenshot or screen recording')]
-    },
     {
       type: ApplicationCommandOptionType.Subcommand,
       name: 'top',
@@ -107,30 +83,24 @@ function bugSubcommands(): APIApplicationCommandOption[] {
   ]
 }
 
-function feedbackSubcommands(): APIApplicationCommandOption[] {
+function suggestionsSubcommands(): APIApplicationCommandOption[] {
   return [
     {
       type: ApplicationCommandOptionType.Subcommand,
-      name: 'report',
-      description: 'Share product feedback',
-      options: [descriptionOption('feedback'), attachmentOption('attachment', 'Optional mockup or screenshot')]
-    },
-    {
-      type: ApplicationCommandOptionType.Subcommand,
       name: 'top',
-      description: 'Show the highest-voted open feedback'
+      description: 'Show the highest-voted open suggestions'
     },
     {
       type: ApplicationCommandOptionType.Subcommand,
       name: 'mine',
-      description: 'Show your recent feedback submissions'
+      description: 'Show your recent suggestions'
     },
     {
       type: ApplicationCommandOptionType.Subcommand,
       name: 'status',
-      description: 'Update feedback status',
+      description: 'Update suggestion status',
       options: [
-        featureIdOption('feature_id', 'Feedback item to update'),
+        featureIdOption('feature_id', 'Suggestion to update'),
         {
           type: ApplicationCommandOptionType.String,
           name: 'status',
@@ -144,38 +114,6 @@ function feedbackSubcommands(): APIApplicationCommandOption[] {
           description: 'Optional status note',
           required: false
         }
-      ]
-    }
-  ]
-}
-
-function roadmapSubcommands(): APIApplicationCommandOption[] {
-  const featureOptions: APIApplicationCommandBasicOption[] = Array.from({ length: 5 }, (_, index) => ({
-    type: ApplicationCommandOptionType.Integer,
-    name: `feature_${index + 1}`,
-    description: `Roadmap feature ${index + 1}`,
-    required: index < 2,
-    autocomplete: true
-  }))
-
-  return [
-    {
-      type: ApplicationCommandOptionType.Subcommand,
-      name: 'list',
-      description: 'Show planned and in-progress roadmap items'
-    },
-    {
-      type: ApplicationCommandOptionType.Subcommand,
-      name: 'poll',
-      description: 'Create a roadmap prioritization poll',
-      options: [
-        {
-          type: ApplicationCommandOptionType.String,
-          name: 'title',
-          description: 'Poll title',
-          required: true
-        },
-        ...featureOptions
       ]
     }
   ]
@@ -186,79 +124,32 @@ export function buildApplicationCommands(manageMessagesPermission: string): REST
     {
       type: ApplicationCommandType.ChatInput,
       name: 'bug',
-      description: 'Bug reporting and triage',
+      description: 'Open the bug report modal',
+      integration_types: [ApplicationIntegrationType.GuildInstall, ApplicationIntegrationType.UserInstall],
+      contexts: [InteractionContextType.Guild, InteractionContextType.BotDM]
+    },
+    {
+      type: ApplicationCommandType.ChatInput,
+      name: 'bugs',
+      description: 'Bug lists and triage actions',
       integration_types: [ApplicationIntegrationType.GuildInstall, ApplicationIntegrationType.UserInstall],
       contexts: [InteractionContextType.Guild, InteractionContextType.BotDM],
-      options: bugSubcommands()
+      options: bugsSubcommands()
     },
     {
       type: ApplicationCommandType.ChatInput,
-      name: 'feedback',
-      description: 'Product feedback and roadmap',
+      name: 'suggestion',
+      description: 'Open the suggestion modal',
+      integration_types: [ApplicationIntegrationType.GuildInstall, ApplicationIntegrationType.UserInstall],
+      contexts: [InteractionContextType.Guild, InteractionContextType.BotDM]
+    },
+    {
+      type: ApplicationCommandType.ChatInput,
+      name: 'suggestions',
+      description: 'Suggestion lists and status',
       integration_types: [ApplicationIntegrationType.GuildInstall, ApplicationIntegrationType.UserInstall],
       contexts: [InteractionContextType.Guild, InteractionContextType.BotDM],
-      options: feedbackSubcommands()
-    },
-    {
-      type: ApplicationCommandType.ChatInput,
-      name: 'roadmap',
-      description: 'Roadmap views and prioritization polls',
-      integration_types: [ApplicationIntegrationType.GuildInstall],
-      contexts: [InteractionContextType.Guild],
-      options: roadmapSubcommands()
-    },
-    {
-      type: ApplicationCommandType.ChatInput,
-      name: 'topbugs',
-      description: 'List the highest voted open bugs',
-      integration_types: [ApplicationIntegrationType.GuildInstall],
-      contexts: [InteractionContextType.Guild]
-    },
-    {
-      type: ApplicationCommandType.ChatInput,
-      name: 'bug-status',
-      description: 'Update the status for an existing bug',
-      default_member_permissions: manageMessagesPermission,
-      integration_types: [ApplicationIntegrationType.GuildInstall],
-      contexts: [InteractionContextType.Guild],
-      options: [
-        bugIdOption('bug_id', 'Bug to update'),
-        {
-          type: ApplicationCommandOptionType.String,
-          name: 'status',
-          description: 'Next status',
-          required: true,
-          autocomplete: true
-        },
-        {
-          type: ApplicationCommandOptionType.String,
-          name: 'note',
-          description: 'Optional status note',
-          required: false
-        }
-      ]
-    },
-    {
-      type: ApplicationCommandType.ChatInput,
-      name: 'bug-link',
-      description: 'Link a bug as a duplicate or regression of another bug',
-      default_member_permissions: manageMessagesPermission,
-      integration_types: [ApplicationIntegrationType.GuildInstall],
-      contexts: [InteractionContextType.Guild],
-      options: [
-        bugIdOption('bug_id', 'Bug to update'),
-        bugIdOption('target_bug_id', 'Target bug'),
-        {
-          type: ApplicationCommandOptionType.String,
-          name: 'relation',
-          description: 'How this bug relates to the target',
-          required: true,
-          choices: [
-            { name: 'duplicate', value: 'duplicate' },
-            { name: 'regression', value: 'regression' }
-          ]
-        }
-      ]
+      options: suggestionsSubcommands()
     },
     {
       type: ApplicationCommandType.Message,
@@ -268,7 +159,7 @@ export function buildApplicationCommands(manageMessagesPermission: string): REST
     },
     {
       type: ApplicationCommandType.Message,
-      name: 'Turn Message into Feedback',
+      name: 'Turn Message into Suggestion',
       integration_types: [ApplicationIntegrationType.GuildInstall],
       contexts: [InteractionContextType.Guild]
     }

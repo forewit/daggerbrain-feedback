@@ -18,11 +18,11 @@ export async function upvoteBug(db: D1Database, bugId: number, userId: string) {
 export async function upvoteFeature(db: D1Database, featureId: number, userId: string) {
   const feature = await getFeatureById(db, featureId)
   if (!feature) {
-    return { ok: false as const, message: 'Feedback not found.' }
+    return { ok: false as const, message: 'Suggestion not found.' }
   }
 
   if (!['OPEN', 'UNDER_REVIEW', 'PLANNED', 'IN_PROGRESS'].includes(feature.status)) {
-    return { ok: false as const, message: 'Only open feedback can be upvoted.' }
+    return { ok: false as const, message: 'Only open suggestions can be upvoted.' }
   }
 
   const outcome = await addFeatureVote(db, feature.id, userId)

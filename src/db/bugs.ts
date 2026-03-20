@@ -365,6 +365,9 @@ export async function createBugPreflightSession(
     userId: string
     title: string
     titleNormalized: string
+    platform?: BugPlatform | null
+    severity?: BugSeverity | null
+    screenshotUrl?: string | null
     sourceGuildId?: string | null
     sourceChannelId?: string | null
     sourceMessageId?: string | null
@@ -377,17 +380,23 @@ export async function createBugPreflightSession(
         user_id,
         title,
         title_normalized,
+        platform,
+        severity,
+        screenshot_url,
         source_guild_id,
         source_channel_id,
         source_message_id
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     .bind(
       input.sessionId,
       input.userId,
       input.title,
       input.titleNormalized,
+      input.platform ?? null,
+      input.severity ?? null,
+      input.screenshotUrl ?? null,
       input.sourceGuildId ?? null,
       input.sourceChannelId ?? null,
       input.sourceMessageId ?? null
@@ -398,7 +407,18 @@ export async function createBugPreflightSession(
 export async function getBugPreflightSession(db: D1Database, sessionId: string, userId: string): Promise<BugPreflightSession | null> {
   const row = await db
     .prepare(`
-      SELECT session_id, user_id, title, title_normalized, source_guild_id, source_channel_id, source_message_id, created_at
+      SELECT
+        session_id,
+        user_id,
+        title,
+        title_normalized,
+        platform,
+        severity,
+        screenshot_url,
+        source_guild_id,
+        source_channel_id,
+        source_message_id,
+        created_at
       FROM bug_preflight_sessions
       WHERE session_id = ? AND user_id = ?
     `)
@@ -412,6 +432,9 @@ export async function getBugPreflightSession(db: D1Database, sessionId: string, 
     user_id: String(row.user_id),
     title: String(row.title),
     title_normalized: String(row.title_normalized),
+    platform: (row.platform as BugPlatform | null) ?? null,
+    severity: (row.severity as BugSeverity | null) ?? null,
+    screenshot_url: row.screenshot_url ? String(row.screenshot_url) : null,
     source_guild_id: row.source_guild_id ? String(row.source_guild_id) : null,
     source_channel_id: row.source_channel_id ? String(row.source_channel_id) : null,
     source_message_id: row.source_message_id ? String(row.source_message_id) : null,

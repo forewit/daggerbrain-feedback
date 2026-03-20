@@ -103,6 +103,9 @@ export interface BugPreflightSession {
   user_id: string
   title: string
   title_normalized: string
+  platform: BugPlatform | null
+  severity: BugSeverity | null
+  screenshot_url: string | null
   source_guild_id: string | null
   source_channel_id: string | null
   source_message_id: string | null
@@ -171,15 +174,5 @@ export interface ItemSubscription {
   item_kind: SubscriptionItemKind
   item_id: number
   user_id: string
-  created_at: string
-}
-
-export interface RoadmapPollRecord {
-  id: number
-  title: string
-  channel_id: string
-  message_id: string
-  feature_ids: string
-  created_by: string
   created_at: string
 }

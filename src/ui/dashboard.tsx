@@ -9,14 +9,14 @@ import type { BugStatus, BugSummary, FeatureStatus, FeatureSummary } from '../ty
 import { dashboardFaviconHref, dashboardStyles } from './generated-assets'
 
 type DashboardBugFilter = 'all' | 'open' | 'resolved'
-type DashboardFeedbackFilter = 'all' | 'open' | 'resolved'
-type DashboardTable = 'bugs' | 'feedback'
+type DashboardSuggestionFilter = 'all' | 'open' | 'resolved'
+type DashboardTable = 'bugs' | 'suggestions'
 
 interface DashboardPageInput {
   bugs: BugSummary[]
   features: FeatureSummary[]
   currentBugFilter: DashboardBugFilter
-  currentFeedbackFilter: DashboardFeedbackFilter
+  currentSuggestionFilter: DashboardSuggestionFilter
   canManage?: boolean
   authUrl?: string | null
   logoutUrl?: string | null
@@ -27,20 +27,20 @@ const dashboardClientScript = String.raw`
   const SORT_STATES = ['none', 'asc', 'desc'];
   const filterState = {
     bugs: document.querySelector('[data-filter-section="bugs"]')?.getAttribute('data-initial-filter') || 'all',
-    feedback: document.querySelector('[data-filter-section="feedback"]')?.getAttribute('data-initial-filter') || 'all'
+    suggestions: document.querySelector('[data-filter-section="suggestions"]')?.getAttribute('data-initial-filter') || 'all'
   };
   const tables = Array.from(document.querySelectorAll('[data-sort-table]'));
 
   const syncActionFormFilters = () => {
     const bugInputs = Array.from(document.querySelectorAll('input[name="bugStatus"]'));
-    const feedbackInputs = Array.from(document.querySelectorAll('input[name="feedbackStatus"]'));
+    const suggestionInputs = Array.from(document.querySelectorAll('input[name="suggestionStatus"]'));
 
     for (const input of bugInputs) {
       input.value = filterState.bugs;
     }
 
-    for (const input of feedbackInputs) {
-      input.value = filterState.feedback;
+    for (const input of suggestionInputs) {
+      input.value = filterState.suggestions;
     }
   };
 
@@ -256,15 +256,15 @@ function ActionForm({
   action,
   label,
   bugFilter,
-  feedbackFilter,
+  suggestionFilter,
   tone = 'primary'
 }: {
-  kind: 'bug' | 'feedback'
+  kind: 'bug' | 'suggestion'
   id: number
   action: 'open' | 'resolve' | 'delete'
   label: string
   bugFilter: DashboardBugFilter
-  feedbackFilter: DashboardFeedbackFilter
+  suggestionFilter: DashboardSuggestionFilter
   tone?: 'primary' | 'danger'
 }) {
   return (
@@ -273,7 +273,7 @@ function ActionForm({
       <input type="hidden" name="id" value={String(id)} />
       <input type="hidden" name="action" value={action} />
       <input type="hidden" name="bugStatus" value={bugFilter} />
-      <input type="hidden" name="feedbackStatus" value={feedbackFilter} />
+      <input type="hidden" name="suggestionStatus" value={suggestionFilter} />
       <Button
         type="submit"
         size="sm"
@@ -311,12 +311,12 @@ function ItemMetaLink({ label, href }: { label: string; href?: string | null }) 
 function BugRows({
   bugs,
   bugFilter,
-  feedbackFilter,
+  suggestionFilter,
   canManage
 }: {
   bugs: BugSummary[]
   bugFilter: DashboardBugFilter
-  feedbackFilter: DashboardFeedbackFilter
+  suggestionFilter: DashboardSuggestionFilter
   canManage: boolean
 }) {
   if (bugs.length === 0) {
@@ -357,14 +357,14 @@ function BugRows({
             <TableCell className="w-[20%]">
               {canManage ? (
                 <div className="flex flex-wrap justify-end gap-2">
-                  <ActionForm kind="bug" id={bug.id} action={toggleAction} label={toggleLabel} bugFilter={bugFilter} feedbackFilter={feedbackFilter} />
+                  <ActionForm kind="bug" id={bug.id} action={toggleAction} label={toggleLabel} bugFilter={bugFilter} suggestionFilter={suggestionFilter} />
                   <ActionForm
                     kind="bug"
                     id={bug.id}
                     action="delete"
                     label="Delete"
                     bugFilter={bugFilter}
-                    feedbackFilter={feedbackFilter}
+                    suggestionFilter={suggestionFilter}
                     tone="danger"
                   />
                 </div>
@@ -387,19 +387,19 @@ function BugRows({
 function FeatureRows({
   features,
   bugFilter,
-  feedbackFilter,
+  suggestionFilter,
   canManage
 }: {
   features: FeatureSummary[]
   bugFilter: DashboardBugFilter
-  feedbackFilter: DashboardFeedbackFilter
+  suggestionFilter: DashboardSuggestionFilter
   canManage: boolean
 }) {
   if (features.length === 0) {
     return (
-      <TableRow>
+        <TableRow>
         <TableCell colSpan={4} className="py-10 text-center text-sm text-muted-foreground">
-          No feedback matches this filter.
+          No suggestions match this filter.
         </TableCell>
       </TableRow>
     )
@@ -422,7 +422,7 @@ function FeatureRows({
           >
             <TableCell className="w-[54%]">
               <div className="grid max-w-[42rem] gap-2">
-                <ItemMetaLink label={`Feedback #${feature.id}`} href={feature.message_url} />
+                <ItemMetaLink label={`Suggestion #${feature.id}`} href={feature.message_url} />
                 <div className="text-[15px] font-semibold leading-6 text-foreground">{feature.description}</div>
               </div>
             </TableCell>
@@ -434,20 +434,20 @@ function FeatureRows({
               {canManage ? (
                 <div className="flex flex-wrap justify-end gap-2">
                   <ActionForm
-                    kind="feedback"
+                    kind="suggestion"
                     id={feature.id}
                     action={toggleAction}
                     label={toggleLabel}
                     bugFilter={bugFilter}
-                    feedbackFilter={feedbackFilter}
+                    suggestionFilter={suggestionFilter}
                   />
                   <ActionForm
-                    kind="feedback"
+                    kind="suggestion"
                     id={feature.id}
                     action="delete"
                     label="Delete"
                     bugFilter={bugFilter}
-                    feedbackFilter={feedbackFilter}
+                    suggestionFilter={suggestionFilter}
                     tone="danger"
                   />
                 </div>
@@ -460,7 +460,7 @@ function FeatureRows({
       })}
       <tr data-filter-empty hidden>
         <td colSpan={4} className="px-4 py-10 text-center text-sm text-muted-foreground">
-          No feedback matches this filter.
+          No suggestions match this filter.
         </td>
       </tr>
     </>
@@ -477,7 +477,7 @@ function DashboardSection({
   icon: ReactNode
   title: string
   tableName: DashboardTable
-  currentFilter: DashboardBugFilter | DashboardFeedbackFilter
+  currentFilter: DashboardBugFilter | DashboardSuggestionFilter
   children: ReactNode
 }) {
   return (
@@ -504,7 +504,7 @@ function DashboardSection({
   )
 }
 
-function DashboardDocument({ bugs, features, currentBugFilter, currentFeedbackFilter, canManage = false, authUrl, logoutUrl }: DashboardPageInput) {
+function DashboardDocument({ bugs, features, currentBugFilter, currentSuggestionFilter, canManage = false, authUrl, logoutUrl }: DashboardPageInput) {
   return (
     <html lang="en" className="dark">
       <head>
@@ -519,9 +519,9 @@ function DashboardDocument({ bugs, features, currentBugFilter, currentFeedbackFi
           <section className="rounded-[28px] border border-border/70 bg-card/88 p-5 shadow-[0_24px_70px_rgba(0,0,0,0.32)] backdrop-blur-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h1 className="text-2xl font-semibold tracking-tight text-foreground">Daggerbrain Feedback</h1>
+                <h1 className="text-2xl font-semibold tracking-tight text-foreground">Daggerbrain Suggestions</h1>
                 <p className="text-sm text-muted-foreground">
-                  Public roadmap browsing stays open. Moderator actions require Discord sign-in.
+                  Community bugs and suggestions in one place. Moderator actions require Discord sign-in.
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -554,26 +554,26 @@ function DashboardDocument({ bugs, features, currentBugFilter, currentFeedbackFi
                 </TableRow>
               </TableHeader>
               <TableBody>
-                <BugRows bugs={bugs} bugFilter={currentBugFilter} feedbackFilter={currentFeedbackFilter} canManage={canManage} />
+                <BugRows bugs={bugs} bugFilter={currentBugFilter} suggestionFilter={currentSuggestionFilter} canManage={canManage} />
               </TableBody>
             </Table>
           </DashboardSection>
 
           <DashboardSection
             icon={<MessagesSquare className="size-4" />}
-            title="Feedback"
-            tableName="feedback"
-            currentFilter={currentFeedbackFilter}
+            title="Suggestions"
+            tableName="suggestions"
+            currentFilter={currentSuggestionFilter}
           >
-            <Table className="min-w-[760px]" data-sort-table="feedback">
+            <Table className="min-w-[760px]" data-sort-table="suggestions">
               <TableHeader>
                 <TableRow className="bg-background/40 hover:bg-background/40">
                   <TableHead>Description</TableHead>
                   <TableHead>
-                    <SortHeader table="feedback" column="status" label="Status" />
+                    <SortHeader table="suggestions" column="status" label="Status" />
                   </TableHead>
                   <TableHead>
-                    <SortHeader table="feedback" column="upvotes" label="Upvotes" />
+                    <SortHeader table="suggestions" column="upvotes" label="Upvotes" />
                   </TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -582,7 +582,7 @@ function DashboardDocument({ bugs, features, currentBugFilter, currentFeedbackFi
                 <FeatureRows
                   features={features}
                   bugFilter={currentBugFilter}
-                  feedbackFilter={currentFeedbackFilter}
+                  suggestionFilter={currentSuggestionFilter}
                   canManage={canManage}
                 />
               </TableBody>
