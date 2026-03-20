@@ -3,6 +3,7 @@ import { InteractionResponseType, type APIApplicationCommandInteraction, type AP
 import { BUG_MODAL_FIELDS, CUSTOM_IDS, FEATURE_MODAL_FIELDS } from './constants'
 import {
   createBugPreflightSession,
+  deleteBug,
   findSimilarBugs,
   getBugById,
   getBugPreflightSession,
@@ -10,7 +11,7 @@ import {
   normalizeBugTitle
 } from './db/bugs'
 import { setBugMessageMetadata } from './db/bugs'
-import { listFeatures, setFeatureMessageMetadata } from './db/features'
+import { deleteFeature, getFeatureById, listFeatures, setFeatureMessageMetadata, updateFeatureStatus } from './db/features'
 import { createBugFromSubmission } from './feedback/create-bug'
 import { createFeatureFromSubmission } from './feedback/create-feature'
 import { deriveTitleFromDescription } from './feedback/derive-title'
@@ -67,6 +68,38 @@ import {
 } from './validation'
 import { renderDashboardPage } from './ui/dashboard'
 
+type DashboardBugFilter = 'all' | 'open' | 'resolved'
+type DashboardFeedbackFilter = 'all' | 'open' | 'resolved'
+
+function getDashboardBugFilter(value: string | undefined): DashboardBugFilter {
+  return value === 'open' || value === 'resolved' ? value : 'all'
+}
+
+function getDashboardFeedbackFilter(value: string | undefined): DashboardFeedbackFilter {
+  return value === 'open' || value === 'resolved' ? value : 'all'
+}
+
+function mapBugFilterToStatus(filter: DashboardBugFilter): 'all' | 'open' | 'closed' {
+  if (filter === 'open') return 'open'
+  if (filter === 'resolved') return 'closed'
+  return 'all'
+}
+
+function mapFeedbackFilterToStatus(filter: DashboardFeedbackFilter): 'all' | 'active' | 'resolved' {
+  if (filter === 'open') return 'active'
+  if (filter === 'resolved') return 'resolved'
+  return 'all'
+}
+
+function buildDashboardUrl(bugFilter: DashboardBugFilter, feedbackFilter: DashboardFeedbackFilter): string {
+  const params = new URLSearchParams({
+    bugStatus: bugFilter,
+    feedbackStatus: feedbackFilter
+  })
+
+  return `/dashboard?${params.toString()}`
+}
+
 function isModerator(interaction: APIInteraction, env: Env): boolean {
   return hasManageMessagesPermission(interaction.member?.permissions) || hasAnyRole(interaction.member?.roles, env.DISCORD_MOD_ROLE_IDS)
 }
@@ -107,6 +140,66 @@ function getFeatureCommandDraft(interaction: APIApplicationCommandInteraction) {
     description: getCommandOptionString(interaction, 'description')?.trim() ?? '',
     screenshot_url: null
   }
+}
+
+async function handleDashboardBugAction(env: Env, client: DiscordRestClient, bugId: number, action: string) {
+  if (action === 'resolve') {
+    const result = await updateBugLifecycleStatus(env.DB, bugId, 'FIXED')
+    if (!result.ok) {
+      return result
+    }
+
+    await syncBugMessage(env, client, result.bugId)
+    return { ok: true as const }
+  }
+
+  if (action === 'open') {
+    const result = await updateBugLifecycleStatus(env.DB, bugId, 'OPEN')
+    if (!result.ok) {
+      return result
+    }
+
+    await syncBugMessage(env, client, result.bugId)
+    return { ok: true as const }
+  }
+
+  if (action === 'delete') {
+    const bug = await getBugById(env.DB, bugId)
+    if (!bug) {
+      return { ok: false as const, message: 'Bug not found.' }
+    }
+
+    await deleteBug(env.DB, bugId)
+    return { ok: true as const }
+  }
+
+  return { ok: false as const, message: 'Unsupported bug action.' }
+}
+
+async function handleDashboardFeedbackAction(env: Env, client: DiscordRestClient, featureId: number, action: string) {
+  const feature = await getFeatureById(env.DB, featureId)
+  if (!feature) {
+    return { ok: false as const, message: 'Feedback not found.' }
+  }
+
+  if (action === 'resolve') {
+    await updateFeatureStatus(env.DB, featureId, 'CLOSED')
+    await syncFeatureMessage(env, client, featureId)
+    return { ok: true as const }
+  }
+
+  if (action === 'open') {
+    await updateFeatureStatus(env.DB, featureId, 'OPEN')
+    await syncFeatureMessage(env, client, featureId)
+    return { ok: true as const }
+  }
+
+  if (action === 'delete') {
+    await deleteFeature(env.DB, featureId)
+    return { ok: true as const }
+  }
+
+  return { ok: false as const, message: 'Unsupported feedback action.' }
 }
 
 async function createFeatureSubmissionResponse(env: Env, client: DiscordRestClient, userId: string, input: {
@@ -518,25 +611,59 @@ export function createApp() {
   })
 
   app.get('/dashboard', async (c) => {
-    const query = bugsQuerySchema.parse({
-      status: c.req.query('status') ?? 'open',
-      sort: c.req.query('sort') ?? 'top'
-    })
-    const [bugs, allBugs, features] = await Promise.all([
-      listBugs(c.env.DB, query.status, query.sort),
-      listBugs(c.env.DB, 'all', 'newest'),
-      listFeatures(c.env.DB, { status: 'all', sort: 'top', limit: 5 })
+    const bugFilter = getDashboardBugFilter(c.req.query('bugStatus'))
+    const feedbackFilter = getDashboardFeedbackFilter(c.req.query('feedbackStatus'))
+
+    const [rawBugs, rawFeatures] = await Promise.all([
+      listBugs(c.env.DB, mapBugFilterToStatus(bugFilter), 'newest'),
+      listFeatures(c.env.DB, { status: mapFeedbackFilterToStatus(feedbackFilter), sort: 'newest', limit: 200 })
     ])
+
+    const bugs = rawBugs.map((bug) => ({
+      ...bug,
+      message_url: buildDiscordMessageUrl(c.env, bug.channel_id ?? null, bug.message_id ?? null)
+    }))
+
+    const features = rawFeatures.map((feature) => ({
+      ...feature,
+      message_url: buildDiscordMessageUrl(c.env, feature.channel_id ?? null, feature.message_id ?? null)
+    }))
 
     return c.html(
       renderDashboardPage({
         bugs,
-        allBugs,
         features,
-        currentStatus: query.status,
-        currentSort: query.sort
+        currentBugFilter: bugFilter,
+        currentFeedbackFilter: feedbackFilter
       })
     )
+  })
+
+  app.post('/dashboard/actions', async (c) => {
+    const formData = await c.req.formData()
+    const kind = String(formData.get('kind') ?? '')
+    const action = String(formData.get('action') ?? '')
+    const id = Number(formData.get('id') ?? 0)
+    const bugFilter = getDashboardBugFilter(String(formData.get('bugStatus') ?? 'all'))
+    const feedbackFilter = getDashboardFeedbackFilter(String(formData.get('feedbackStatus') ?? 'all'))
+    const client = new DiscordRestClient(c.env)
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return c.redirect(buildDashboardUrl(bugFilter, feedbackFilter))
+    }
+
+    const result =
+      kind === 'bug'
+        ? await handleDashboardBugAction(c.env, client, id, action)
+        : kind === 'feedback'
+          ? await handleDashboardFeedbackAction(c.env, client, id, action)
+          : { ok: false as const, message: 'Unsupported dashboard action.' }
+
+    if (!result.ok) {
+      console.error('dashboard.action_failed', { kind, action, id, message: result.message })
+    }
+
+    return c.redirect(buildDashboardUrl(bugFilter, feedbackFilter))
   })
 
   app.post('/interactions', async (c) => {

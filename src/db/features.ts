@@ -23,8 +23,11 @@ function toFeatureSummary(row: Record<string, unknown>): FeatureSummary {
     title: String(row.title),
     description: String(row.description),
     status: row.status as FeatureStatus,
+    reporter_id: String(row.reporter_id ?? ''),
     votes_count: Number(row.votes_count),
     screenshot_url: row.screenshot_url ? String(row.screenshot_url) : null,
+    channel_id: row.channel_id ? String(row.channel_id) : null,
+    message_id: row.message_id ? String(row.message_id) : null,
     created_at: String(row.created_at)
   }
 }
@@ -59,16 +62,21 @@ export async function getFeatureById(db: D1Database, featureId: number): Promise
 
 export async function listFeatures(
   db: D1Database,
-  options?: { status?: 'active' | 'all'; sort?: 'top' | 'newest'; limit?: number }
+  options?: { status?: 'active' | 'resolved' | 'all'; sort?: 'top' | 'newest'; limit?: number }
 ): Promise<FeatureSummary[]> {
   const status = options?.status ?? 'active'
   const sort = options?.sort ?? 'top'
   const limit = options?.limit ?? 6
-  const where = status === 'active' ? `WHERE status IN ('OPEN', 'PLANNED')` : ''
+  const where =
+    status === 'all'
+      ? ''
+      : status === 'active'
+        ? `WHERE status IN ('OPEN', 'PLANNED')`
+        : `WHERE status IN ('SHIPPED', 'CLOSED')`
   const order = sort === 'top' ? 'ORDER BY votes_count DESC, created_at DESC' : 'ORDER BY created_at DESC'
   const result = await db
     .prepare(`
-      SELECT id, title, description, status, votes_count, screenshot_url, created_at
+      SELECT id, title, description, status, reporter_id, votes_count, screenshot_url, channel_id, message_id, created_at
       FROM features
       ${where}
       ${order}
@@ -78,6 +86,17 @@ export async function listFeatures(
     .all<Record<string, unknown>>()
 
   return (result.results ?? []).map(toFeatureSummary)
+}
+
+export async function updateFeatureStatus(db: D1Database, featureId: number, status: FeatureStatus): Promise<void> {
+  await db
+    .prepare(`UPDATE features SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+    .bind(status, featureId)
+    .run()
+}
+
+export async function deleteFeature(db: D1Database, featureId: number): Promise<void> {
+  await db.prepare(`DELETE FROM features WHERE id = ?`).bind(featureId).run()
 }
 
 export async function addFeatureVote(db: D1Database, featureId: number, userId: string): Promise<'added' | 'duplicate'> {

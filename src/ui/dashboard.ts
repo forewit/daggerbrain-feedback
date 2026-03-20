@@ -1,46 +1,16 @@
 import type { BugStatus, BugSummary, FeatureStatus, FeatureSummary } from '../types'
 
+type DashboardBugFilter = 'all' | 'open' | 'resolved'
+type DashboardFeedbackFilter = 'all' | 'open' | 'resolved'
+
 interface DashboardPageInput {
   bugs: BugSummary[]
-  allBugs: BugSummary[]
   features: FeatureSummary[]
-  currentStatus: string
-  currentSort: string
+  currentBugFilter: DashboardBugFilter
+  currentFeedbackFilter: DashboardFeedbackFilter
 }
 
-interface StatusMetric {
-  label: string
-  value: number
-  tone: string
-}
-
-const COMMAND_CARDS = [
-  {
-    name: '/bug',
-    detail: 'Intake flow with duplicate and regression preflight before a report goes live.',
-    accent: 'signal'
-  },
-  {
-    name: '/feedback',
-    detail: 'Capture product ideas and route community voting into the feature queue.',
-    accent: 'sun'
-  },
-  {
-    name: '/topbugs',
-    detail: 'Post the highest-voted active issues directly into Discord for quick pulse checks.',
-    accent: 'sky'
-  },
-  {
-    name: '/bug-status',
-    detail: 'Moderator-only lifecycle control for open, in progress, fixed, closed, and duplicate states.',
-    accent: 'mint'
-  },
-  {
-    name: '/bug-link',
-    detail: 'Connect duplicates and regressions so related issues roll up into the same story.',
-    accent: 'rose'
-  }
-] as const
+const DASHBOARD_FAVICON_HREF = 'data:image/webp;base64,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'
 
 function escapeHtml(value: string): string {
   return value
@@ -51,245 +21,181 @@ function escapeHtml(value: string): string {
     .replaceAll("'", '&#39;')
 }
 
-function normalizeDateInput(value: string): Date | null {
-  const normalized = value.includes('T') ? value : `${value.replace(' ', 'T')}Z`
-  const date = new Date(normalized)
-  return Number.isNaN(date.getTime()) ? null : date
-}
-
-function formatDate(value: string): string {
-  const date = normalizeDateInput(value)
-  if (!date) return value
-
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit'
-  }).format(date)
-}
-
-function statusLabel(status: BugStatus): string {
-  if (status === 'OPEN') return 'Open'
-  if (status === 'IN_PROGRESS') return 'In progress'
-  if (status === 'FIXED') return 'Fixed'
+function bugStatusLabel(status: BugStatus): string {
+  if (status === 'IN_PROGRESS') return 'In Progress'
+  if (status === 'FIXED') return 'Resolved'
   if (status === 'DUPLICATE') return 'Duplicate'
-  return 'Closed'
+  if (status === 'CLOSED') return 'Closed'
+  return 'Open'
 }
 
-function statusTone(status: BugStatus): string {
-  if (status === 'OPEN') return 'danger'
-  if (status === 'IN_PROGRESS') return 'warning'
-  if (status === 'FIXED') return 'success'
-  if (status === 'DUPLICATE') return 'muted'
-  return 'neutral'
-}
-
-function featureStatusLabel(status: FeatureStatus): string {
-  if (status === 'OPEN') return 'Open'
-  if (status === 'PLANNED') return 'Planned'
-  if (status === 'SHIPPED') return 'Shipped'
-  return 'Closed'
-}
-
-function featureTone(status: FeatureStatus): string {
-  if (status === 'OPEN') return 'sun'
-  if (status === 'PLANNED') return 'sky'
-  if (status === 'SHIPPED') return 'success'
+function bugStatusTone(status: BugStatus): string {
+  if (status === 'OPEN') return 'open'
+  if (status === 'IN_PROGRESS') return 'progress'
+  if (status === 'FIXED') return 'resolved'
   return 'muted'
 }
 
-function renderRelationship(bug: BugSummary): string {
-  if (bug.relationship_type === 'DUPLICATE_OF' && bug.related_bug_id) {
-    return `Duplicate of #${bug.related_bug_id}`
+function featureStatusLabel(status: FeatureStatus): string {
+  if (status === 'PLANNED') return 'Planned'
+  if (status === 'SHIPPED') return 'Shipped'
+  if (status === 'CLOSED') return 'Resolved'
+  return 'Open'
+}
+
+function featureStatusTone(status: FeatureStatus): string {
+  if (status === 'OPEN') return 'open'
+  if (status === 'PLANNED') return 'progress'
+  if (status === 'SHIPPED' || status === 'CLOSED') return 'resolved'
+  return 'muted'
+}
+
+function bugFilterBucket(status: BugStatus): 'open' | 'resolved' {
+  return status === 'OPEN' || status === 'IN_PROGRESS' ? 'open' : 'resolved'
+}
+
+function featureFilterBucket(status: FeatureStatus): 'open' | 'resolved' {
+  return status === 'OPEN' || status === 'PLANNED' ? 'open' : 'resolved'
+}
+
+function renderFilterButton(
+  label: string,
+  table: 'bugs' | 'feedback',
+  value: 'all' | 'open' | 'resolved',
+  active: boolean
+): string {
+  return `<button class="filter-chip${active ? ' filter-chip--active' : ''}" type="button" data-filter-button data-table="${table}" data-value="${value}">${escapeHtml(label)}</button>`
+}
+
+function renderActionForm(
+  kind: 'bug' | 'feedback',
+  id: number,
+  action: 'open' | 'resolve' | 'delete',
+  label: string,
+  bugFilter: DashboardBugFilter,
+  feedbackFilter: DashboardFeedbackFilter,
+  tone: 'primary' | 'danger' = 'primary'
+): string {
+  return `
+    <form method="post" action="/dashboard/actions">
+      <input type="hidden" name="kind" value="${kind}" />
+      <input type="hidden" name="id" value="${id}" />
+      <input type="hidden" name="action" value="${action}" />
+      <input type="hidden" name="bugStatus" value="${bugFilter}" />
+      <input type="hidden" name="feedbackStatus" value="${feedbackFilter}" />
+      <button class="action-button action-button--${tone}" type="submit">${escapeHtml(label)}</button>
+    </form>
+  `
+}
+
+function renderBugRowId(bug: BugSummary): string {
+  const label = `Bug #${bug.id}`
+  if (!bug.message_url) {
+    return `<span class="row-id">${escapeHtml(label)}</span>`
   }
 
-  if (bug.relationship_type === 'REGRESSION_OF' && bug.related_bug_id) {
-    return `Regression of #${bug.related_bug_id}`
+  return `<a class="row-id row-id--link" href="${escapeHtml(bug.message_url)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`
+}
+
+function renderBugRows(bugs: BugSummary[], bugFilter: DashboardBugFilter, feedbackFilter: DashboardFeedbackFilter): string {
+  if (bugs.length === 0) {
+    return '<tr><td colspan="4" class="empty-row">No bugs match this filter.</td></tr>'
   }
 
-  return 'Standalone'
-}
+  return bugs
+    .map((bug, index) => {
+      const toggleAction = bug.status === 'OPEN' || bug.status === 'IN_PROGRESS' ? 'resolve' : 'open'
+      const toggleLabel = toggleAction === 'resolve' ? 'Resolve' : 'Reopen'
 
-function countByStatus(bugs: BugSummary[], status: BugStatus): number {
-  return bugs.filter((bug) => bug.status === status).length
-}
-
-function sumVotes(bugs: BugSummary[], features: FeatureSummary[]): number {
-  return bugs.reduce((total, bug) => total + bug.votes_count, 0) + features.reduce((total, feature) => total + feature.votes_count, 0)
-}
-
-function createStatusMetrics(allBugs: BugSummary[]): StatusMetric[] {
-  return [
-    { label: 'Open', value: countByStatus(allBugs, 'OPEN'), tone: 'danger' },
-    { label: 'In progress', value: countByStatus(allBugs, 'IN_PROGRESS'), tone: 'warning' },
-    { label: 'Fixed', value: countByStatus(allBugs, 'FIXED'), tone: 'success' },
-    { label: 'Duplicate', value: countByStatus(allBugs, 'DUPLICATE'), tone: 'muted' },
-    { label: 'Closed', value: countByStatus(allBugs, 'CLOSED'), tone: 'neutral' }
-  ]
-}
-
-function renderMetricCard(label: string, value: string | number, detail: string, tone: string): string {
-  return `
-    <article class="metric-card">
-      <span class="metric-card__tone metric-card__tone--${tone}"></span>
-      <span class="metric-card__label">${escapeHtml(label)}</span>
-      <strong class="metric-card__value">${escapeHtml(String(value))}</strong>
-      <span class="metric-card__detail">${escapeHtml(detail)}</span>
-    </article>
-  `
-}
-
-function renderCommandCard(command: (typeof COMMAND_CARDS)[number]): string {
-  return `
-    <article class="command-card command-card--${command.accent}">
-      <strong>${escapeHtml(command.name)}</strong>
-      <p>${escapeHtml(command.detail)}</p>
-    </article>
-  `
-}
-
-function renderBugCard(bug: BugSummary): string {
-  const searchText = [
-    `#${bug.id}`,
-    bug.title,
-    bug.status,
-    renderRelationship(bug),
-    `votes ${bug.votes_count}`,
-    `duplicate flags ${bug.duplicate_flags_count}`,
-    `linked duplicates ${bug.linked_duplicates_count}`,
-    `regressions ${bug.regressions_count}`
-  ]
-    .join(' ')
-    .toLowerCase()
-
-  return `
-    <article class="issue-card" id="bug-${bug.id}" data-bug-card data-search="${escapeHtml(searchText)}">
-      <div class="issue-card__main">
-        <div class="issue-card__heading">
-          <a class="issue-card__anchor" href="#bug-${bug.id}">#${bug.id}</a>
-          <span class="pill pill--${statusTone(bug.status)}">${escapeHtml(statusLabel(bug.status))}</span>
-        </div>
-        <h3>${escapeHtml(bug.title)}</h3>
-        <p>${escapeHtml(renderRelationship(bug))}</p>
-      </div>
-      <dl class="issue-card__stats">
-        <div>
-          <dt>Votes</dt>
-          <dd>${bug.votes_count}</dd>
-        </div>
-        <div>
-          <dt>Flags</dt>
-          <dd>${bug.duplicate_flags_count}</dd>
-        </div>
-        <div>
-          <dt>Dupes</dt>
-          <dd>${bug.linked_duplicates_count}</dd>
-        </div>
-        <div>
-          <dt>Regressions</dt>
-          <dd>${bug.regressions_count}</dd>
-        </div>
-      </dl>
-      <div class="issue-card__meta">
-        <span>${escapeHtml(formatDate(bug.created_at))}</span>
-      </div>
-    </article>
-  `
-}
-
-function renderFeatureCard(feature: FeatureSummary): string {
-  const thumbnail = feature.screenshot_url
-    ? `<img src="${escapeHtml(feature.screenshot_url)}" alt="Preview for feature ${feature.id}" loading="lazy" />`
-    : '<div class="feature-card__placeholder">Idea</div>'
-
-  return `
-    <article class="feature-card">
-      <div class="feature-card__media">${thumbnail}</div>
-      <div class="feature-card__body">
-        <div class="feature-card__header">
-          <strong>#${feature.id} ${escapeHtml(feature.title)}</strong>
-          <span class="pill pill--${featureTone(feature.status)}">${escapeHtml(featureStatusLabel(feature.status))}</span>
-        </div>
-        <p>${escapeHtml(feature.description)}</p>
-        <div class="feature-card__meta">
-          <span>${feature.votes_count} votes</span>
-          <span>${escapeHtml(formatDate(feature.created_at))}</span>
-        </div>
-      </div>
-    </article>
-  `
-}
-
-function renderStatusBar(metrics: StatusMetric[]): string {
-  const total = metrics.reduce((sum, metric) => sum + metric.value, 0)
-
-  return metrics
-    .map((metric) => {
-      const width = total === 0 ? 0 : Math.max((metric.value / total) * 100, metric.value > 0 ? 8 : 0)
       return `
-        <span
-          class="status-bar__segment status-bar__segment--${metric.tone}"
-          style="width:${width.toFixed(2)}%"
-          title="${escapeHtml(`${metric.label}: ${metric.value}`)}"
-        ></span>
+        <tr data-sort-row data-original-index="${index}" data-status="${escapeHtml(bugStatusLabel(bug.status).toLowerCase())}" data-upvotes="${bug.votes_count}" data-filter-bucket="${bugFilterBucket(bug.status)}">
+          <td>
+            <div class="description-cell">
+              ${renderBugRowId(bug)}
+              <strong>${escapeHtml(bug.description || bug.title)}</strong>
+            </div>
+          </td>
+          <td><span class="status-pill status-pill--${bugStatusTone(bug.status)}">${escapeHtml(bugStatusLabel(bug.status))}</span></td>
+          <td>${bug.votes_count}</td>
+          <td>
+            <div class="actions">
+              ${renderActionForm('bug', bug.id, toggleAction, toggleLabel, bugFilter, feedbackFilter)}
+              ${renderActionForm('bug', bug.id, 'delete', 'Delete', bugFilter, feedbackFilter, 'danger')}
+            </div>
+          </td>
+        </tr>
+      `
+    })
+    .join('')
+}
+
+function renderFeatureRows(features: FeatureSummary[], bugFilter: DashboardBugFilter, feedbackFilter: DashboardFeedbackFilter): string {
+  if (features.length === 0) {
+    return '<tr><td colspan="4" class="empty-row">No feedback matches this filter.</td></tr>'
+  }
+
+  return features
+    .map((feature, index) => {
+      const toggleAction = feature.status === 'CLOSED' || feature.status === 'SHIPPED' ? 'open' : 'resolve'
+      const toggleLabel = toggleAction === 'resolve' ? 'Resolve' : 'Reopen'
+
+      return `
+        <tr data-sort-row data-original-index="${index}" data-status="${escapeHtml(featureStatusLabel(feature.status).toLowerCase())}" data-upvotes="${feature.votes_count}" data-filter-bucket="${featureFilterBucket(feature.status)}">
+          <td>
+            <div class="description-cell">
+              <span class="row-id">Feedback #${feature.id}</span>
+              <strong>${escapeHtml(feature.description)}</strong>
+            </div>
+          </td>
+          <td><span class="status-pill status-pill--${featureStatusTone(feature.status)}">${escapeHtml(featureStatusLabel(feature.status))}</span></td>
+          <td>${feature.votes_count}</td>
+          <td>
+            <div class="actions">
+              ${renderActionForm('feedback', feature.id, toggleAction, toggleLabel, bugFilter, feedbackFilter)}
+              ${renderActionForm('feedback', feature.id, 'delete', 'Delete', bugFilter, feedbackFilter, 'danger')}
+            </div>
+          </td>
+        </tr>
       `
     })
     .join('')
 }
 
 export function renderDashboardPage(input: DashboardPageInput): string {
-  const { bugs, allBugs, features, currentStatus, currentSort } = input
-  const statusMetrics = createStatusMetrics(allBugs)
-  const leadBug = bugs[0] ?? null
-  const totalOpen = countByStatus(allBugs, 'OPEN') + countByStatus(allBugs, 'IN_PROGRESS')
-  const totalResolved = countByStatus(allBugs, 'FIXED') + countByStatus(allBugs, 'CLOSED')
-  const totalSignals = sumVotes(allBugs, features)
-  const totalRegressions = allBugs.reduce((sum, bug) => sum + bug.regressions_count, 0)
-  const activeFeatureCount = features.filter((feature) => feature.status === 'OPEN' || feature.status === 'PLANNED').length
-  const bugCards = bugs.map(renderBugCard).join('')
-  const featureCards = features.map(renderFeatureCard).join('')
-  const bugResultsLabel = `${bugs.length} ${bugs.length === 1 ? 'issue' : 'issues'}`
-  const dashboardApiUrl = `/api/bugs?status=${currentStatus}&sort=${currentSort}`
+  const { bugs, features, currentBugFilter, currentFeedbackFilter } = input
 
   return `<!doctype html>
   <html lang="en">
     <head>
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1" />
-      <title>Daggerbrain Feedback Dashboard</title>
+      <link rel="icon" type="image/webp" href="${DASHBOARD_FAVICON_HREF}" />
+      <title>Daggerbrain Dashboard</title>
       <style>
         :root {
           color-scheme: dark;
-          --bg: #09111b;
-          --bg-elevated: rgba(10, 21, 34, 0.76);
-          --bg-soft: rgba(18, 33, 50, 0.88);
-          --line: rgba(162, 185, 206, 0.14);
-          --text: #f4f7fb;
-          --muted: #8ea3b8;
-          --signal: #ff7a18;
-          --signal-soft: rgba(255, 122, 24, 0.18);
-          --sky: #38bdf8;
-          --sky-soft: rgba(56, 189, 248, 0.18);
-          --mint: #34d399;
-          --mint-soft: rgba(52, 211, 153, 0.18);
-          --rose: #fb7185;
-          --rose-soft: rgba(251, 113, 133, 0.18);
-          --sun: #facc15;
-          --sun-soft: rgba(250, 204, 21, 0.18);
-          --neutral: rgba(143, 155, 179, 0.22);
-          --radius: 24px;
-          --radius-sm: 16px;
-          --shadow: 0 24px 70px rgba(0, 0, 0, 0.34);
-          --font: "Space Grotesk", "Aptos", "Segoe UI", sans-serif;
+          --bg: #081018;
+          --panel: #101c2b;
+          --panel-strong: #152335;
+          --line: rgba(175, 196, 219, 0.18);
+          --text: #eef4fb;
+          --muted: #8fa1b8;
+          --accent: #58c4ff;
+          --accent-strong: #2eaadc;
+          --danger: #ff7b7b;
+          --danger-soft: rgba(255, 123, 123, 0.14);
+          --open: rgba(88, 196, 255, 0.16);
+          --progress: rgba(255, 190, 92, 0.16);
+          --resolved: rgba(85, 214, 144, 0.16);
+          --muted-pill: rgba(160, 172, 190, 0.14);
+          --radius: 22px;
+          --radius-sm: 14px;
+          --shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+          --font: "Aptos", "Segoe UI", sans-serif;
         }
 
         * {
           box-sizing: border-box;
-        }
-
-        html {
-          scroll-behavior: smooth;
         }
 
         body {
@@ -298,22 +204,8 @@ export function renderDashboardPage(input: DashboardPageInput): string {
           font-family: var(--font);
           color: var(--text);
           background:
-            radial-gradient(circle at top left, rgba(255, 122, 24, 0.24), transparent 28%),
-            radial-gradient(circle at top right, rgba(56, 189, 248, 0.18), transparent 24%),
-            radial-gradient(circle at bottom, rgba(52, 211, 153, 0.12), transparent 26%),
-            linear-gradient(180deg, #08111b 0%, #091520 45%, #060d15 100%);
-        }
-
-        body::before {
-          content: "";
-          position: fixed;
-          inset: 0;
-          pointer-events: none;
-          background-image:
-            linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
-          background-size: 28px 28px;
-          mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.65), transparent 85%);
+            radial-gradient(circle at top left, rgba(88, 196, 255, 0.12), transparent 28%),
+            linear-gradient(180deg, #09111a 0%, #070d14 100%);
         }
 
         a {
@@ -321,835 +213,457 @@ export function renderDashboardPage(input: DashboardPageInput): string {
           text-decoration: none;
         }
 
-        img {
-          display: block;
-          max-width: 100%;
+        code {
+          font-family: "Cascadia Code", "Consolas", monospace;
+        }
+
+        input {
+          display: none;
         }
 
         .shell {
-          width: min(1380px, calc(100% - 32px));
+          width: min(1320px, calc(100% - 28px));
           margin: 24px auto 40px;
         }
 
-        .hero {
-          position: relative;
-          overflow: hidden;
-          display: grid;
-          grid-template-columns: minmax(0, 1.5fr) minmax(320px, 0.9fr);
-          gap: 20px;
-          padding: 24px;
+        .section {
+          margin-top: 22px;
+          padding: 22px;
           border: 1px solid var(--line);
-          border-radius: calc(var(--radius) + 8px);
-          background: linear-gradient(145deg, rgba(10, 21, 34, 0.92), rgba(9, 18, 29, 0.78));
+          border-radius: var(--radius);
+          background: linear-gradient(180deg, rgba(21, 35, 53, 0.96), rgba(14, 24, 37, 0.96));
           box-shadow: var(--shadow);
-          backdrop-filter: blur(16px);
         }
 
-        .hero::after {
-          content: "";
-          position: absolute;
-          width: 320px;
-          height: 320px;
-          right: -120px;
-          top: -100px;
-          border-radius: 999px;
-          background: radial-gradient(circle, rgba(255, 122, 24, 0.28), transparent 65%);
-        }
-
-        .hero__copy,
-        .hero__spotlight {
-          position: relative;
-          z-index: 1;
-        }
-
-        .eyebrow {
-          display: inline-flex;
+        .section-header {
+          display: flex;
           align-items: center;
-          gap: 8px;
-          padding: 7px 12px;
-          border: 1px solid rgba(255, 255, 255, 0.08);
-          border-radius: 999px;
-          background: rgba(255, 255, 255, 0.04);
-          color: var(--muted);
-          font-size: 12px;
-          letter-spacing: 0.14em;
-          text-transform: uppercase;
-        }
-
-        h1 {
-          margin: 16px 0 10px;
-          font-size: clamp(2rem, 4vw, 3.45rem);
-          line-height: 0.96;
-          letter-spacing: -0.06em;
-        }
-
-        .hero__copy p {
-          margin: 0;
-          max-width: 60ch;
-          color: var(--muted);
-          font-size: 15px;
-          line-height: 1.65;
-        }
-
-        .hero__links {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 10px;
-          margin-top: 18px;
-        }
-
-        .hero__links a {
-          padding: 10px 14px;
-          border-radius: 999px;
-          background: rgba(255, 255, 255, 0.06);
-          border: 1px solid rgba(255, 255, 255, 0.08);
-          color: #dce7f3;
-          font-size: 13px;
-        }
-
-        .spotlight {
-          height: 100%;
-          display: grid;
-          gap: 16px;
-          padding: 18px;
-          border-radius: var(--radius);
-          border: 1px solid rgba(255, 255, 255, 0.07);
-          background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03));
-        }
-
-        .spotlight__label {
-          color: var(--muted);
-          text-transform: uppercase;
-          letter-spacing: 0.12em;
-          font-size: 12px;
-        }
-
-        .spotlight__bug {
-          display: grid;
-          gap: 12px;
-        }
-
-        .spotlight__bug strong {
-          font-size: 22px;
-          line-height: 1.15;
-          letter-spacing: -0.03em;
-        }
-
-        .spotlight__bug p,
-        .spotlight__empty {
-          margin: 0;
-          color: var(--muted);
-          font-size: 14px;
-          line-height: 1.6;
-        }
-
-        .spotlight__meta {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 10px;
-        }
-
-        .spotlight__meta span {
-          padding: 8px 12px;
-          border-radius: 999px;
-          background: rgba(255, 255, 255, 0.05);
-          color: #dce7f3;
-          font-size: 13px;
-        }
-
-        .metrics {
-          display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
+          justify-content: flex-start;
           gap: 14px;
-          margin-top: 18px;
+          margin-bottom: 16px;
+          flex-wrap: wrap;
         }
 
-        .metric-card,
-        .panel {
-          border: 1px solid var(--line);
-          border-radius: var(--radius);
-          background: var(--bg-elevated);
-          backdrop-filter: blur(14px);
+        .section-header h2 {
+          margin: 0;
+          font-size: 1.35rem;
+          letter-spacing: -0.04em;
         }
 
-        .metric-card {
-          position: relative;
-          padding: 18px;
-          overflow: hidden;
-          min-height: 138px;
-        }
-
-        .metric-card__tone {
-          position: absolute;
-          top: 0;
-          right: 0;
-          width: 110px;
-          height: 110px;
-          border-radius: 999px;
-          transform: translate(35%, -35%);
-          opacity: 0.78;
-        }
-
-        .metric-card__tone--danger { background: radial-gradient(circle, rgba(251, 113, 133, 0.32), transparent 70%); }
-        .metric-card__tone--warning { background: radial-gradient(circle, rgba(250, 204, 21, 0.3), transparent 70%); }
-        .metric-card__tone--success { background: radial-gradient(circle, rgba(52, 211, 153, 0.28), transparent 70%); }
-        .metric-card__tone--sky { background: radial-gradient(circle, rgba(56, 189, 248, 0.28), transparent 70%); }
-
-        .metric-card__label,
-        .metric-card__detail {
-          display: block;
-          position: relative;
-          z-index: 1;
-        }
-
-        .metric-card__label {
-          color: var(--muted);
-          font-size: 12px;
-          letter-spacing: 0.12em;
-          text-transform: uppercase;
-        }
-
-        .metric-card__value {
-          position: relative;
-          z-index: 1;
-          display: block;
-          margin-top: 20px;
-          font-size: clamp(2rem, 4vw, 2.8rem);
-          line-height: 0.95;
-          letter-spacing: -0.08em;
-        }
-
-        .metric-card__detail {
-          margin-top: 16px;
-          color: #dce7f3;
-          font-size: 13px;
-          line-height: 1.55;
-          max-width: 28ch;
-        }
-
-        .main-grid {
-          display: grid;
-          grid-template-columns: minmax(0, 1.7fr) minmax(320px, 0.95fr);
-          gap: 18px;
-          margin-top: 18px;
-        }
-
-        .panel {
-          padding: 20px;
-          box-shadow: var(--shadow);
-        }
-
-        .panel__header {
+        .filter-row {
           display: flex;
-          align-items: flex-start;
-          justify-content: space-between;
-          gap: 16px;
-          margin-bottom: 18px;
+          flex-wrap: wrap;
+          gap: 10px;
         }
 
-        .panel__header h2 {
-          margin: 6px 0 0;
-          font-size: 24px;
-          letter-spacing: -0.05em;
-        }
-
-        .panel__header p {
-          margin: 8px 0 0;
-          color: var(--muted);
-          font-size: 14px;
-          line-height: 1.55;
-          max-width: 58ch;
-        }
-
-        .pill,
-        .chip {
+        .filter-chip {
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          gap: 8px;
-          min-height: 34px;
-          padding: 7px 12px;
-          border-radius: 999px;
-          font-size: 12px;
-          letter-spacing: 0.02em;
-          border: 1px solid transparent;
-          white-space: nowrap;
-        }
-
-        .pill--danger { background: rgba(251, 113, 133, 0.14); color: #ffc1cd; }
-        .pill--warning { background: rgba(250, 204, 21, 0.16); color: #ffe690; }
-        .pill--success { background: rgba(52, 211, 153, 0.16); color: #aef0d6; }
-        .pill--muted { background: rgba(148, 163, 184, 0.14); color: #d4dce7; }
-        .pill--neutral { background: rgba(125, 211, 252, 0.14); color: #bae6fd; }
-        .pill--sun { background: var(--sun-soft); color: #fde68a; }
-        .pill--sky { background: var(--sky-soft); color: #bae6fd; }
-
-        .controls {
-          display: grid;
-          gap: 14px;
-          margin-bottom: 18px;
-        }
-
-        .controls__bar {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 12px;
-          align-items: center;
-        }
-
-        .control-group,
-        .search {
-          border: 1px solid var(--line);
-          border-radius: var(--radius-sm);
-          background: var(--bg-soft);
-        }
-
-        .control-group {
-          display: flex;
-          gap: 12px;
-          padding: 10px 12px;
-          flex-wrap: wrap;
-        }
-
-        label {
-          display: grid;
-          gap: 6px;
-          color: var(--muted);
-          font-size: 12px;
-          letter-spacing: 0.08em;
-          text-transform: uppercase;
-        }
-
-        select,
-        .search input {
-          min-width: 140px;
-          padding: 11px 12px;
-          border: 1px solid rgba(255, 255, 255, 0.08);
-          border-radius: 12px;
-          background: rgba(6, 13, 21, 0.78);
-          color: var(--text);
-          font: inherit;
-        }
-
-        .search {
-          display: flex;
-          align-items: center;
-          gap: 12px;
+          min-height: 38px;
           padding: 0 14px;
-        }
-
-        .search span {
-          color: var(--muted);
-          font-size: 13px;
-          white-space: nowrap;
-        }
-
-        .search input {
-          width: 100%;
-          min-width: 0;
-          border: 0;
-          background: transparent;
-          padding-inline: 0;
-        }
-
-        button {
-          appearance: none;
-          border: 0;
+          border: 1px solid var(--line);
           border-radius: 999px;
-          padding: 12px 16px;
+          background: rgba(255, 255, 255, 0.05);
+          color: var(--muted);
           font: inherit;
-          font-weight: 600;
-          color: #08111b;
-          background: linear-gradient(135deg, #facc15, #ff7a18);
-          cursor: pointer;
-        }
-
-        .issue-grid,
-        .stack {
-          display: grid;
-          gap: 12px;
-        }
-
-        .issue-card {
-          display: grid;
-          grid-template-columns: minmax(0, 1.55fr) minmax(190px, 0.9fr) auto;
-          gap: 18px;
-          align-items: center;
-          padding: 16px 18px;
-          border: 1px solid rgba(255, 255, 255, 0.07);
-          border-radius: 20px;
-          background:
-            linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.02)),
-            rgba(7, 15, 24, 0.88);
-          transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
-        }
-
-        .issue-card:hover {
-          transform: translateY(-2px);
-          border-color: rgba(255, 122, 24, 0.35);
-          background:
-            linear-gradient(180deg, rgba(255, 122, 24, 0.08), rgba(255, 255, 255, 0.02)),
-            rgba(7, 15, 24, 0.92);
-        }
-
-        .issue-card__heading,
-        .feature-card__header,
-        .feature-card__meta,
-        .legend,
-        .panel__links {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 10px;
-          align-items: center;
-        }
-
-        .issue-card__anchor {
-          color: #ffd59a;
-          font-weight: 600;
-        }
-
-        .issue-card h3 {
-          margin: 8px 0 6px;
-          font-size: 18px;
-          letter-spacing: -0.04em;
-          line-height: 1.2;
-        }
-
-        .issue-card p,
-        .feature-card p,
-        .empty-state p {
-          margin: 0;
-          color: var(--muted);
           font-size: 14px;
-          line-height: 1.55;
+          cursor: pointer;
+          transition: border-color 140ms ease, color 140ms ease, background 140ms ease;
         }
 
-        .issue-card__stats {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 10px 14px;
-          margin: 0;
+        .filter-chip--active {
+          border-color: rgba(88, 196, 255, 0.44);
+          background: rgba(88, 196, 255, 0.14);
+          color: var(--text);
         }
 
-        .issue-card__stats div {
-          padding: 10px 12px;
-          border-radius: 14px;
-          background: rgba(255, 255, 255, 0.04);
+        .table-wrap {
+          overflow-x: auto;
+          border: 1px solid var(--line);
+          border-radius: 18px;
+          background: rgba(7, 13, 20, 0.46);
         }
 
-        .issue-card__stats dt {
+        table {
+          width: 100%;
+          border-collapse: collapse;
+          min-width: 760px;
+        }
+
+        th,
+        td {
+          padding: 15px 16px;
+          border-bottom: 1px solid var(--line);
+          text-align: left;
+          vertical-align: middle;
+        }
+
+        th {
           color: var(--muted);
-          font-size: 11px;
-          letter-spacing: 0.08em;
-          text-transform: uppercase;
-        }
-
-        .issue-card__stats dd {
-          margin: 6px 0 0;
-          font-size: 18px;
+          font-size: 12px;
           font-weight: 600;
-        }
-
-        .issue-card__meta {
-          color: var(--muted);
-          font-size: 13px;
-          justify-self: end;
-          text-align: right;
-        }
-
-        .empty-state {
-          padding: 24px;
-          border: 1px dashed rgba(255, 255, 255, 0.12);
-          border-radius: 20px;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
           background: rgba(255, 255, 255, 0.03);
         }
 
-        .empty-state strong {
-          display: block;
-          margin-bottom: 8px;
-          font-size: 16px;
+        tbody tr:hover {
+          background: rgba(255, 255, 255, 0.025);
         }
 
-        .command-card {
-          padding: 16px;
-          border-radius: 18px;
-          border: 1px solid rgba(255, 255, 255, 0.08);
-          background: rgba(255, 255, 255, 0.04);
+        tbody tr:last-child td {
+          border-bottom: 0;
         }
 
-        .command-card strong {
-          display: inline-flex;
-          margin-bottom: 10px;
-          font-size: 17px;
-          letter-spacing: -0.04em;
-        }
-
-        .command-card p {
-          margin: 0;
-          color: var(--muted);
-          font-size: 14px;
-          line-height: 1.55;
-        }
-
-        .command-card--signal { box-shadow: inset 0 0 0 1px rgba(255, 122, 24, 0.18); }
-        .command-card--sun { box-shadow: inset 0 0 0 1px rgba(250, 204, 21, 0.18); }
-        .command-card--sky { box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.18); }
-        .command-card--mint { box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.18); }
-        .command-card--rose { box-shadow: inset 0 0 0 1px rgba(251, 113, 133, 0.18); }
-
-        .feature-card {
+        .description-cell {
           display: grid;
-          grid-template-columns: 84px minmax(0, 1fr);
-          gap: 14px;
-          padding: 14px;
-          border-radius: 18px;
-          border: 1px solid rgba(255, 255, 255, 0.08);
-          background: rgba(255, 255, 255, 0.035);
+          gap: 6px;
+          max-width: 520px;
         }
 
-        .feature-card__media {
-          width: 84px;
-          height: 84px;
-          border-radius: 16px;
-          overflow: hidden;
-          background: linear-gradient(135deg, rgba(56, 189, 248, 0.22), rgba(255, 122, 24, 0.22));
+        .description-cell strong {
+          font-size: 15px;
+          line-height: 1.45;
+          font-weight: 600;
         }
 
-        .feature-card__media img {
-          width: 100%;
-          height: 100%;
-          object-fit: cover;
-        }
-
-        .feature-card__placeholder {
-          display: grid;
-          place-items: center;
-          width: 100%;
-          height: 100%;
-          font-size: 13px;
-          text-transform: uppercase;
-          letter-spacing: 0.14em;
-          color: #edf5ff;
-        }
-
-        .feature-card__header strong {
-          flex: 1;
-          min-width: 0;
-          font-size: 16px;
-          line-height: 1.25;
-          letter-spacing: -0.03em;
-        }
-
-        .feature-card__meta {
-          margin-top: 12px;
+        .row-id {
           color: var(--muted);
           font-size: 12px;
         }
 
-        .status-bar {
-          display: flex;
-          height: 16px;
-          overflow: hidden;
+        .row-id--link {
+          color: #a8ddff;
+        }
+
+        .row-id--link:hover {
+          text-decoration: underline;
+        }
+
+        .status-pill {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 32px;
+          padding: 0 12px;
           border-radius: 999px;
-          background: rgba(255, 255, 255, 0.06);
-          margin-bottom: 14px;
+          font-size: 12px;
+          font-weight: 600;
         }
 
-        .status-bar__segment--danger { background: linear-gradient(90deg, #fb7185, #f43f5e); }
-        .status-bar__segment--warning { background: linear-gradient(90deg, #facc15, #f59e0b); }
-        .status-bar__segment--success { background: linear-gradient(90deg, #34d399, #10b981); }
-        .status-bar__segment--muted { background: linear-gradient(90deg, #94a3b8, #64748b); }
-        .status-bar__segment--neutral { background: linear-gradient(90deg, #38bdf8, #0ea5e9); }
-
-        .legend {
-          row-gap: 8px;
+        .status-pill--open {
+          background: var(--open);
+          color: #8dd7ff;
         }
 
-        .legend__item {
+        .status-pill--progress {
+          background: var(--progress);
+          color: #ffd58a;
+        }
+
+        .status-pill--resolved {
+          background: var(--resolved);
+          color: #9be7b6;
+        }
+
+        .status-pill--muted {
+          background: var(--muted-pill);
+          color: #d2dbe6;
+        }
+
+        .actions {
+          display: flex;
+          justify-content: flex-end;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+
+        .action-button {
+          appearance: none;
+          border: 1px solid rgba(88, 196, 255, 0.28);
+          border-radius: 10px;
+          background: rgba(88, 196, 255, 0.12);
+          color: var(--text);
+          padding: 9px 12px;
+          font: inherit;
+          font-size: 13px;
+          font-weight: 600;
+          cursor: pointer;
+        }
+
+        .action-button--danger {
+          border-color: rgba(255, 123, 123, 0.3);
+          background: var(--danger-soft);
+          color: #ffc8c8;
+        }
+
+        .empty-row {
+          color: var(--muted);
+          text-align: center;
+          padding: 22px;
+        }
+
+        .sort-button {
           display: inline-flex;
           align-items: center;
           gap: 8px;
-          color: var(--muted);
-          font-size: 13px;
+          min-height: 34px;
+          padding: 0 10px;
+          border: 1px solid rgba(255, 255, 255, 0.11);
+          border-radius: 10px;
+          background: rgba(0, 0, 0, 0.28);
+          color: inherit;
+          font: inherit;
+          font-size: inherit;
+          font-weight: inherit;
+          letter-spacing: inherit;
+          text-transform: inherit;
+          cursor: pointer;
+          transition: background 140ms ease, border-color 140ms ease;
         }
 
-        .legend__dot {
-          width: 10px;
-          height: 10px;
-          border-radius: 999px;
+        .sort-button:hover {
+          background: rgba(0, 0, 0, 0.36);
+          border-color: rgba(255, 255, 255, 0.18);
         }
 
-        .legend__dot--danger { background: #fb7185; }
-        .legend__dot--warning { background: #facc15; }
-        .legend__dot--success { background: #34d399; }
-        .legend__dot--muted { background: #94a3b8; }
-        .legend__dot--neutral { background: #38bdf8; }
-
-        .panel__links {
-          margin-top: 16px;
+        .sort-indicator {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 12px;
+          min-width: 12px;
+          color: #7f92aa;
+          font-size: 11px;
+          letter-spacing: 0;
         }
 
-        .chip {
-          background: rgba(255, 255, 255, 0.04);
-          border-color: rgba(255, 255, 255, 0.08);
-          color: #dce7f3;
-        }
-
-        [hidden] {
-          display: none !important;
-        }
-
-        @media (max-width: 1120px) {
-          .hero,
-          .main-grid {
-            grid-template-columns: 1fr;
-          }
-
-          .metrics {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-          }
-        }
-
-        @media (max-width: 760px) {
+        @media (max-width: 860px) {
           .shell {
-            width: min(100% - 20px, 100%);
-            margin: 12px auto 28px;
+            width: min(100% - 16px, 100%);
+            margin-top: 16px;
           }
 
-          .hero,
-          .panel {
-            padding: 18px;
+          .section {
+            padding: 16px;
           }
 
-          .metrics {
-            grid-template-columns: 1fr;
-          }
-
-          .issue-card {
-            grid-template-columns: 1fr;
-          }
-
-          .issue-card__meta {
-            justify-self: start;
-            text-align: left;
-          }
-
-          .controls__bar,
-          .control-group {
+          .section-header {
             flex-direction: column;
-            align-items: stretch;
-          }
-
-          .feature-card {
-            grid-template-columns: 1fr;
-          }
-
-          .feature-card__media {
-            width: 100%;
-            height: 180px;
+            align-items: flex-start;
           }
         }
       </style>
     </head>
     <body>
       <main class="shell">
-        <section class="hero">
-          <div class="hero__copy">
-            <span class="eyebrow">Discord feedback command center</span>
-            <h1>Compact signal for bugs, feedback, and triage momentum.</h1>
-            <p>
-              A tighter view across slash-command intake, duplicate pressure, regressions, and the feature queue.
-              Filter the live bug list, scan what is heating up, and keep the moderation workflow close at hand.
-            </p>
-            <div class="hero__links">
-              <a href="#priority">Priority queue</a>
-              <a href="#workflow">Slash command flows</a>
-              <a href="#features">Feature radar</a>
-              <a href="${dashboardApiUrl}">JSON feed</a>
+        <section class="section" id="bugs">
+          <div class="section-header" data-filter-section="bugs" data-initial-filter="${currentBugFilter}">
+            <h2>Bugs</h2>
+            <div class="filter-row">
+              ${renderFilterButton('All', 'bugs', 'all', currentBugFilter === 'all')}
+              ${renderFilterButton('Open', 'bugs', 'open', currentBugFilter === 'open')}
+              ${renderFilterButton('Resolved', 'bugs', 'resolved', currentBugFilter === 'resolved')}
             </div>
           </div>
-          <div class="hero__spotlight">
-            <div class="spotlight">
-              <span class="spotlight__label">Current hotspot</span>
-              ${
-                leadBug
-                  ? `<div class="spotlight__bug">
-                      <strong>#${leadBug.id} ${escapeHtml(leadBug.title)}</strong>
-                      <p>${escapeHtml(renderRelationship(leadBug))}</p>
-                      <div class="spotlight__meta">
-                        <span>${escapeHtml(statusLabel(leadBug.status))}</span>
-                        <span>${leadBug.votes_count} votes</span>
-                        <span>${leadBug.regressions_count} regressions</span>
-                        <span>${escapeHtml(formatDate(leadBug.created_at))}</span>
-                      </div>
-                    </div>`
-                  : '<p class="spotlight__empty">No issues match the current filters yet. Adjust the view to explore the full queue.</p>'
-              }
-            </div>
+          <div class="table-wrap">
+            <table data-sort-table="bugs">
+              <thead>
+                <tr>
+                  <th>Description</th>
+                  <th>
+                    <button class="sort-button" type="button" data-sort-header data-table="bugs" data-key="status" data-label="Status">
+                      <span>Status</span>
+                      <span class="sort-indicator" aria-hidden="true"></span>
+                    </button>
+                  </th>
+                  <th>
+                    <button class="sort-button" type="button" data-sort-header data-table="bugs" data-key="upvotes" data-label="Upvotes">
+                      <span>Upvotes</span>
+                      <span class="sort-indicator" aria-hidden="true"></span>
+                    </button>
+                  </th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${renderBugRows(bugs, currentBugFilter, currentFeedbackFilter)}
+                <tr class="empty-row" data-filter-empty hidden><td colspan="4">No bugs match this filter.</td></tr>
+              </tbody>
+            </table>
           </div>
         </section>
 
-        <section class="metrics" aria-label="Dashboard summary">
-          ${renderMetricCard('Active bugs', totalOpen, 'Open plus in-progress issues currently competing for attention.', 'danger')}
-          ${renderMetricCard('Resolved', totalResolved, 'Fixed and closed items that have made it out of the active queue.', 'success')}
-          ${renderMetricCard('Community signal', totalSignals, 'Combined bug votes and feature votes flowing through Discord.', 'sky')}
-          ${renderMetricCard('Regression pressure', totalRegressions, `${activeFeatureCount} feature requests are active or planned alongside bug work.`, 'warning')}
-        </section>
-
-        <section class="main-grid">
-          <div class="stack">
-            <section class="panel" id="priority">
-              <div class="panel__header">
-                <div>
-                  <span class="eyebrow">Priority queue</span>
-                  <h2>Live bug board</h2>
-                  <p>Dense cards keep title, state, relationship, and signal in one scanline without losing the story behind each issue.</p>
-                </div>
-                <span class="chip" data-bug-results>${escapeHtml(bugResultsLabel)}</span>
-              </div>
-
-              <div class="controls">
-                <form class="controls__bar" method="get" action="/dashboard">
-                  <div class="control-group">
-                    <label>
-                      Status
-                      <select name="status">
-                        <option value="open" ${currentStatus === 'open' ? 'selected' : ''}>Open queue</option>
-                        <option value="closed" ${currentStatus === 'closed' ? 'selected' : ''}>Closed queue</option>
-                        <option value="all" ${currentStatus === 'all' ? 'selected' : ''}>Everything</option>
-                      </select>
-                    </label>
-                    <label>
-                      Sort
-                      <select name="sort">
-                        <option value="top" ${currentSort === 'top' ? 'selected' : ''}>Top voted</option>
-                        <option value="newest" ${currentSort === 'newest' ? 'selected' : ''}>Newest first</option>
-                      </select>
-                    </label>
-                  </div>
-                  <button type="submit">Apply view</button>
-                </form>
-
-                <label class="search">
-                  <span>Search issues</span>
-                  <input type="search" placeholder="Title, status, relationship, bug id..." data-dashboard-search />
-                </label>
-              </div>
-
-              <div class="issue-grid" data-bug-grid>
-                ${bugCards || ''}
-              </div>
-
-              <div class="empty-state" ${bugs.length === 0 ? '' : 'hidden'} data-server-empty>
-                <strong>No bugs match this view.</strong>
-                <p>Try switching status or sort to bring more of the queue into focus.</p>
-              </div>
-
-              <div class="empty-state" hidden data-search-empty>
-                <strong>No issues match your search.</strong>
-                <p>Try a broader title fragment, status, or relationship keyword.</p>
-              </div>
-            </section>
+        <section class="section" id="feedback">
+          <div class="section-header" data-filter-section="feedback" data-initial-filter="${currentFeedbackFilter}">
+            <h2>Feedback</h2>
+            <div class="filter-row">
+              ${renderFilterButton('All', 'feedback', 'all', currentFeedbackFilter === 'all')}
+              ${renderFilterButton('Open', 'feedback', 'open', currentFeedbackFilter === 'open')}
+              ${renderFilterButton('Resolved', 'feedback', 'resolved', currentFeedbackFilter === 'resolved')}
+            </div>
           </div>
-
-          <aside class="stack">
-            <section class="panel" id="workflow">
-              <div class="panel__header">
-                <div>
-                  <span class="eyebrow">Workflow map</span>
-                  <h2>Slash command flows</h2>
-                  <p>The dashboard now reflects the same paths people use in Discord, from first report to moderator triage.</p>
-                </div>
-              </div>
-              <div class="stack">
-                ${COMMAND_CARDS.map(renderCommandCard).join('')}
-              </div>
-            </section>
-
-            <section class="panel">
-              <div class="panel__header">
-                <div>
-                  <span class="eyebrow">Status mix</span>
-                  <h2>Queue health</h2>
-                  <p>A quick read on how the bug inventory is distributed across the lifecycle.</p>
-                </div>
-              </div>
-              <div class="status-bar" aria-hidden="true">
-                ${renderStatusBar(statusMetrics)}
-              </div>
-              <div class="legend">
-                ${statusMetrics
-                  .map(
-                    (metric) => `
-                      <span class="legend__item">
-                        <span class="legend__dot legend__dot--${metric.tone}"></span>
-                        ${escapeHtml(metric.label)} ${metric.value}
-                      </span>
-                    `
-                  )
-                  .join('')}
-              </div>
-              <div class="panel__links">
-                <a class="chip" href="${dashboardApiUrl}">Current bug JSON</a>
-                <a class="chip" href="/">Service health</a>
-              </div>
-            </section>
-
-            <section class="panel" id="features">
-              <div class="panel__header">
-                <div>
-                  <span class="eyebrow">Feature radar</span>
-                  <h2>Requests with momentum</h2>
-                  <p>Top-voted feedback is visible next to bugs now, so roadmap signal is no longer hidden behind the Discord feed.</p>
-                </div>
-              </div>
-              <div class="stack">
-                ${
-                  featureCards ||
-                  `<div class="empty-state">
-                    <strong>No feature requests yet.</strong>
-                    <p>New ideas submitted through <code>/feedback</code> will appear here once they land in the queue.</p>
-                  </div>`
-                }
-              </div>
-            </section>
-          </aside>
+          <div class="table-wrap">
+            <table data-sort-table="feedback">
+              <thead>
+                <tr>
+                  <th>Description</th>
+                  <th>
+                    <button class="sort-button" type="button" data-sort-header data-table="feedback" data-key="status" data-label="Status">
+                      <span>Status</span>
+                      <span class="sort-indicator" aria-hidden="true"></span>
+                    </button>
+                  </th>
+                  <th>
+                    <button class="sort-button" type="button" data-sort-header data-table="feedback" data-key="upvotes" data-label="Upvotes">
+                      <span>Upvotes</span>
+                      <span class="sort-indicator" aria-hidden="true"></span>
+                    </button>
+                  </th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${renderFeatureRows(features, currentBugFilter, currentFeedbackFilter)}
+                <tr class="empty-row" data-filter-empty hidden><td colspan="4">No feedback matches this filter.</td></tr>
+              </tbody>
+            </table>
+          </div>
         </section>
       </main>
 
       <script>
         (() => {
-          const searchInput = document.querySelector('[data-dashboard-search]');
-          const cards = Array.from(document.querySelectorAll('[data-bug-card]'));
-          const results = document.querySelector('[data-bug-results]');
-          const serverEmpty = document.querySelector('[data-server-empty]');
-          const searchEmpty = document.querySelector('[data-search-empty]');
+          const SORT_STATES = ['none', 'asc', 'desc'];
+          const filterState = {
+            bugs: document.querySelector('[data-filter-section="bugs"]')?.getAttribute('data-initial-filter') || 'all',
+            feedback: document.querySelector('[data-filter-section="feedback"]')?.getAttribute('data-initial-filter') || 'all'
+          };
+          const tables = Array.from(document.querySelectorAll('[data-sort-table]'));
 
-          if (!(searchInput instanceof HTMLInputElement) || !results || !searchEmpty) {
-            return;
-          }
+          const syncActionFormFilters = () => {
+            const bugInputs = Array.from(document.querySelectorAll('input[name="bugStatus"]'));
+            const feedbackInputs = Array.from(document.querySelectorAll('input[name="feedbackStatus"]'));
 
-          const update = () => {
-            const query = searchInput.value.trim().toLowerCase();
-            let visible = 0;
-
-            for (const card of cards) {
-              const haystack = (card.getAttribute('data-search') || '').toLowerCase();
-              const match = !query || haystack.includes(query);
-              card.toggleAttribute('hidden', !match);
-              if (match) visible += 1;
+            for (const input of bugInputs) {
+              input.setAttribute('value', filterState.bugs);
             }
 
-            results.textContent = visible + ' ' + (visible === 1 ? 'issue' : 'issues');
-            searchEmpty.toggleAttribute('hidden', visible !== 0 || query.length === 0);
-
-            if (serverEmpty) {
-              serverEmpty.toggleAttribute('hidden', cards.length !== 0 || query.length > 0);
+            for (const input of feedbackInputs) {
+              input.setAttribute('value', filterState.feedback);
             }
           };
 
-          searchInput.addEventListener('input', update);
-          update();
+          const renderFilterState = (tableName) => {
+            const buttons = Array.from(document.querySelectorAll('[data-filter-button][data-table="' + tableName + '"]'));
+            for (const button of buttons) {
+              const active = button.getAttribute('data-value') === filterState[tableName];
+              button.classList.toggle('filter-chip--active', active);
+            }
+          };
+
+          for (const table of tables) {
+            const tableName = table.getAttribute('data-sort-table');
+            if (!tableName) continue;
+
+            const tbody = table.querySelector('tbody');
+            if (!tbody) continue;
+
+            const rows = Array.from(tbody.querySelectorAll('[data-sort-row]'));
+            const emptyRow = tbody.querySelector('[data-filter-empty]');
+            const headers = Array.from(document.querySelectorAll('[data-sort-header][data-table="' + tableName + '"]'));
+            const state = { key: null, direction: 'none' };
+
+            const renderHeaderState = () => {
+              for (const header of headers) {
+                const key = header.getAttribute('data-key');
+                const indicator = header.querySelector('.sort-indicator');
+                if (!indicator) continue;
+
+                const active = state.key === key ? state.direction : 'none';
+                indicator.textContent = active === 'asc' ? '\u2191' : active === 'desc' ? '\u2193' : '';
+              }
+            };
+
+            const applySort = () => {
+              const sorted = [...rows];
+
+              if (state.direction === 'none' || !state.key) {
+                sorted.sort((left, right) => Number(left.getAttribute('data-original-index')) - Number(right.getAttribute('data-original-index')));
+              } else if (state.key === 'status') {
+                sorted.sort((left, right) => {
+                  const leftValue = left.getAttribute('data-status') || '';
+                  const rightValue = right.getAttribute('data-status') || '';
+                  return state.direction === 'asc' ? leftValue.localeCompare(rightValue) : rightValue.localeCompare(leftValue);
+                });
+              } else if (state.key === 'upvotes') {
+                sorted.sort((left, right) => {
+                  const leftValue = Number(left.getAttribute('data-upvotes') || '0');
+                  const rightValue = Number(right.getAttribute('data-upvotes') || '0');
+                  return state.direction === 'asc' ? leftValue - rightValue : rightValue - leftValue;
+                });
+              }
+
+              for (const row of sorted) {
+                tbody.appendChild(row);
+              }
+
+              renderHeaderState();
+            };
+
+            const applyFilter = () => {
+              let visibleCount = 0;
+              const activeFilter = filterState[tableName];
+
+              for (const row of rows) {
+                const bucket = row.getAttribute('data-filter-bucket');
+                const visible = activeFilter === 'all' || bucket === activeFilter;
+                row.toggleAttribute('hidden', !visible);
+                if (visible) visibleCount += 1;
+              }
+
+              if (emptyRow) {
+                emptyRow.toggleAttribute('hidden', visibleCount !== 0);
+              }
+
+              renderFilterState(tableName);
+              syncActionFormFilters();
+            };
+
+            for (const header of headers) {
+              header.addEventListener('click', () => {
+                const key = header.getAttribute('data-key');
+                if (!key) return;
+
+                if (state.key !== key) {
+                  state.key = key;
+                  state.direction = 'asc';
+                } else {
+                  const index = SORT_STATES.indexOf(state.direction);
+                  state.direction = SORT_STATES[(index + 1) % SORT_STATES.length];
+                  if (state.direction === 'none') {
+                    state.key = null;
+                  }
+                }
+
+                applySort();
+              });
+            }
+
+            const filterButtons = Array.from(document.querySelectorAll('[data-filter-button][data-table="' + tableName + '"]'));
+            for (const button of filterButtons) {
+              button.addEventListener('click', () => {
+                const value = button.getAttribute('data-value');
+                if (!value) return;
+                filterState[tableName] = value;
+                applyFilter();
+              });
+            }
+
+            applyFilter();
+            renderHeaderState();
+          }
         })();
       </script>
     </body>

@@ -48,11 +48,16 @@ export interface BugRecord {
 export interface BugSummary {
   id: number
   title: string
+  description: string
   status: BugStatus
+  reporter_id: string
   votes_count: number
   duplicate_flags_count: number
   linked_duplicates_count: number
   regressions_count: number
+  channel_id?: string | null
+  message_id?: string | null
+  message_url?: string | null
   related_bug_id: number | null
   relationship_type: BugRelationshipType | null
   closed_reason: BugClosedReason | null
@@ -112,7 +117,11 @@ export interface FeatureSummary {
   title: string
   description: string
   status: FeatureStatus
+  reporter_id: string
   votes_count: number
   screenshot_url: string | null
+  channel_id?: string | null
+  message_id?: string | null
+  message_url?: string | null
   created_at: string
 }

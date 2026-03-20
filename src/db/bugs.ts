@@ -82,11 +82,15 @@ function toBugSummary(row: Record<string, unknown>): BugSummary {
   return {
     id: Number(row.id),
     title: String(row.title),
+    description: String(row.description ?? ''),
     status: row.status as BugStatus,
+    reporter_id: String(row.reporter_id ?? ''),
     votes_count: Number(row.votes_count),
     duplicate_flags_count: Number(row.duplicate_flags_count),
     linked_duplicates_count: Number(row.linked_duplicates_count ?? 0),
     regressions_count: Number(row.regressions_count ?? 0),
+    channel_id: row.channel_id ? String(row.channel_id) : null,
+    message_id: row.message_id ? String(row.message_id) : null,
     related_bug_id: row.related_bug_id === null || row.related_bug_id === undefined ? null : Number(row.related_bug_id),
     relationship_type: (row.relationship_type as BugRelationshipType | null) ?? null,
     closed_reason: (row.closed_reason as BugClosedReason | null) ?? null,
@@ -212,9 +216,13 @@ export async function listBugs(db: D1Database, status: 'open' | 'closed' | 'all'
     SELECT
       b.id,
       b.title,
+      b.description,
       b.status,
+      b.reporter_id,
       b.votes_count,
       b.duplicate_flags_count,
+      b.channel_id,
+      b.message_id,
       b.related_bug_id,
       b.relationship_type,
       b.closed_reason,
@@ -243,6 +251,10 @@ export async function listBugs(db: D1Database, status: 'open' | 'closed' | 'all'
   const result = await stmt.bind(...bindValues).all<Record<string, unknown>>()
 
   return (result.results ?? []).map(toBugSummary)
+}
+
+export async function deleteBug(db: D1Database, bugId: number): Promise<void> {
+  await db.prepare(`DELETE FROM bugs WHERE id = ?`).bind(bugId).run()
 }
 
 export async function addVote(db: D1Database, bugId: number, userId: string): Promise<'added' | 'duplicate'> {

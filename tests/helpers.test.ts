@@ -292,16 +292,19 @@ describe('schemas and normalization', () => {
 })
 
 describe('dashboard renderer', () => {
-  it('renders the compact dashboard with bug and feature sections', () => {
+  it('renders the simplified admin tables with row actions', () => {
     const html = renderDashboardPage({
-      currentStatus: 'open',
-      currentSort: 'top',
+      currentBugFilter: 'all',
+      currentFeedbackFilter: 'all',
       bugs: [
         {
           id: 7,
           title: 'App freezes after reconnect',
+          description: 'The app freezes after reconnecting to the session.',
           status: 'OPEN',
+          reporter_id: 'user-123',
           votes_count: 9,
+          message_url: 'https://discord.com/channels/guild/channel/message',
           duplicate_flags_count: 2,
           linked_duplicates_count: 3,
           regressions_count: 1,
@@ -310,36 +313,6 @@ describe('dashboard renderer', () => {
           closed_reason: null,
           status_note: null,
           created_at: '2026-03-18 15:00:00'
-        }
-      ],
-      allBugs: [
-        {
-          id: 7,
-          title: 'App freezes after reconnect',
-          status: 'OPEN',
-          votes_count: 9,
-          duplicate_flags_count: 2,
-          linked_duplicates_count: 3,
-          regressions_count: 1,
-          related_bug_id: null,
-          relationship_type: null,
-          closed_reason: null,
-          status_note: null,
-          created_at: '2026-03-18 15:00:00'
-        },
-        {
-          id: 8,
-          title: 'Toolbar flickers on hover',
-          status: 'FIXED',
-          votes_count: 3,
-          duplicate_flags_count: 0,
-          linked_duplicates_count: 0,
-          regressions_count: 0,
-          related_bug_id: null,
-          relationship_type: null,
-          closed_reason: 'RESOLVED',
-          status_note: null,
-          created_at: '2026-03-17 10:00:00'
         }
       ],
       features: [
@@ -348,6 +321,7 @@ describe('dashboard renderer', () => {
           title: 'Saved dashboard filters',
           description: 'Remember the last dashboard view for returning moderators.',
           status: 'PLANNED',
+          reporter_id: 'user-456',
           votes_count: 5,
           screenshot_url: null,
           created_at: '2026-03-16 09:00:00'
@@ -355,11 +329,12 @@ describe('dashboard renderer', () => {
       ]
     })
 
-    expect(html).toContain('Compact signal for bugs, feedback, and triage momentum.')
-    expect(html).toContain('Slash command flows')
-    expect(html).toContain('Feature radar')
-    expect(html).toContain('Saved dashboard filters')
-    expect(html).toContain('Search issues')
+    expect(html).toContain('Description')
+    expect(html).toContain('Resolve')
+    expect(html).toContain('Delete')
+    expect(html).toContain('data-sort-header')
+    expect(html).toContain('https://discord.com/channels/guild/channel/message')
+    expect(html).toContain('Remember the last dashboard view for returning moderators.')
   })
 })
 
