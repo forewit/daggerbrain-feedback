@@ -195,7 +195,7 @@ export function buildApplicationCommands(manageMessagesPermission: string): REST
     },
     {
       type: ApplicationCommandType.ChatInput,
-      name: 'feedback-config',
+      name: 'config',
       description: 'Configure bug and suggestion channels for this server',
       default_member_permissions: String((1n << 4n) | (1n << 5n)),
       dm_permission: false,

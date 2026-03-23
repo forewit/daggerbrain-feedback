@@ -256,6 +256,14 @@ function featureStatusActionCustomId(featureId: number, status: string): string 
   return `${CUSTOM_IDS.featureStatusActionPrefix}${featureId}:${status}`
 }
 
+function bugDeleteActionCustomId(bugId: number): string {
+  return `${CUSTOM_IDS.bugDeleteActionPrefix}${bugId}`
+}
+
+function featureDeleteActionCustomId(featureId: number): string {
+  return `${CUSTOM_IDS.featureDeleteActionPrefix}${featureId}`
+}
+
 function bugManageCustomId(bugId: number, slot?: string): string {
   return slot ? `${CUSTOM_IDS.manageBugPrefix}${bugId}:${slot}` : `${CUSTOM_IDS.manageBugPrefix}${bugId}`
 }
@@ -469,6 +477,7 @@ export function bugManageResponse(bug: BugRecord, bugUrl?: string | null): APIIn
     ),
     button(bugStatusActionCustomId(bug.id, 'FIXED'), 'Fixed', ButtonStyle.Success, bug.status === 'FIXED'),
     button(bugStatusActionCustomId(bug.id, 'CLOSED'), 'Closed', ButtonStyle.Secondary, bug.status === 'CLOSED'),
+    button(bugDeleteActionCustomId(bug.id), 'Delete', ButtonStyle.Danger),
     ...(bugUrl ? [linkButton(`Bug #${bug.id}`, bugUrl)] : [])
   ]
 
@@ -514,6 +523,7 @@ export function featureManageResponse(feature: FeatureRecord, featureUrl?: strin
       ButtonStyle.Secondary,
       feature.status === 'CLOSED'
     ),
+    button(featureDeleteActionCustomId(feature.id), 'Delete', ButtonStyle.Danger),
     ...(featureUrl ? [linkButton(`Suggestion #${feature.id}`, featureUrl)] : [])
   ]
 

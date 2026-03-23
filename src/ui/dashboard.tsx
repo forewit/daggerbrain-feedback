@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 import type { BugStatus, BugSummary, FeatureStatus, FeatureSummary } from '@/types'
 import { dashboardFaviconHref, dashboardStyles } from './generated-assets'
+import type { DiscordOauthGuild } from '@/discord/auth'
 
 type DashboardBugFilter = 'all' | 'open' | 'resolved'
 type DashboardSuggestionFilter = 'all' | 'open' | 'resolved'
@@ -24,6 +25,13 @@ interface DashboardPageInput {
   isAuthenticated?: boolean
   canManage?: boolean
   authUrl?: string | null
+  logoutUrl?: string | null
+  guildName?: string
+  changeGuildUrl?: string | null
+}
+
+interface GuildSelectionPageInput {
+  guilds: DiscordOauthGuild[]
   logoutUrl?: string | null
 }
 
@@ -222,12 +230,29 @@ function featureStatusOrder(status: FeatureStatus): number {
   return 7
 }
 
-function isBugResolvedStatus(status: BugStatus): boolean {
-  return status === 'FIXED' || status === 'CLOSED' || status === 'DUPLICATE'
+const dashboardBugStatuses: BugStatus[] = ['OPEN', 'ACKNOWLEDGED', 'IN_PROGRESS', 'FIXED', 'CLOSED', 'DUPLICATE']
+const dashboardFeatureStatuses: FeatureStatus[] = [
+  'OPEN',
+  'UNDER_REVIEW',
+  'PLANNED',
+  'IN_PROGRESS',
+  'SHIPPED',
+  'DECLINED',
+  'CLOSED'
+]
+
+function bugStatusActionLabel(status: BugStatus): string {
+  if (status === 'ACKNOWLEDGED') return 'Acknowledge'
+  if (status === 'IN_PROGRESS') return 'In Progress'
+  if (status === 'FIXED') return 'Fixed'
+  return bugStatusLabel(status)
 }
 
-function isFeatureResolvedStatus(status: FeatureStatus): boolean {
-  return status === 'SHIPPED' || status === 'DECLINED' || status === 'CLOSED'
+function featureStatusActionLabel(status: FeatureStatus): string {
+  if (status === 'UNDER_REVIEW') return 'Review'
+  if (status === 'IN_PROGRESS') return 'In Progress'
+  if (status === 'CLOSED') return 'Closed'
+  return featureStatusLabel(status)
 }
 
 function StatusBadge({ label, className }: { label: string; className: string }) {
@@ -280,6 +305,7 @@ function ActionForm({
   bugFilter,
   suggestionFilter,
   active = false,
+  disabled = false,
   variant = active ? 'default' : 'outline',
   size = 'sm',
   className,
@@ -287,10 +313,11 @@ function ActionForm({
 }: {
   kind: DashboardItemKind
   id: number
-  action: 'upvote' | 'follow' | 'open' | 'resolve' | 'delete'
+  action: 'upvote' | 'follow' | 'delete' | BugStatus | FeatureStatus | 'open' | 'resolve'
   bugFilter: DashboardBugFilter
   suggestionFilter: DashboardSuggestionFilter
   active?: boolean
+  disabled?: boolean
   variant?: 'default' | 'outline' | 'destructive'
   size?: 'xs' | 'sm'
   className?: string
@@ -303,7 +330,7 @@ function ActionForm({
       <input type="hidden" name="action" value={action} />
       <input type="hidden" name="bugStatus" value={bugFilter} />
       <input type="hidden" name="suggestionStatus" value={suggestionFilter} />
-      <Button type="submit" size={size} variant={variant} className={cn('justify-center', className)}>
+      <Button type="submit" size={size} variant={variant} disabled={disabled} className={cn('justify-center', className)}>
         {children}
       </Button>
     </form>
@@ -405,19 +432,9 @@ function ItemKey({ id, href }: { id: number; href?: string | null }) {
   )
 }
 
-function ManageLink({ href }: { href: string }) {
-  return (
-    <Button asChild variant="link" size="sm" className="h-auto p-0 text-xs text-muted-foreground">
-      <a href={href} target="_blank" rel="noreferrer">
-        Manage
-      </a>
-    </Button>
-  )
-}
-
 function ActionsTableHead() {
   return (
-    <TableHead className="w-[16rem] text-right text-xs font-semibold tracking-[0.16em] text-muted-foreground uppercase">
+    <TableHead className="w-[28rem] text-right text-xs font-semibold tracking-[0.16em] text-muted-foreground uppercase">
       Actions
     </TableHead>
   )
@@ -437,8 +454,7 @@ function DashboardManageActions({
   status,
   bugFilter,
   suggestionFilter,
-  canManage = false,
-  manageHref
+  canManage = false
 }: {
   kind: DashboardItemKind
   id: number
@@ -446,30 +462,41 @@ function DashboardManageActions({
   bugFilter: DashboardBugFilter
   suggestionFilter: DashboardSuggestionFilter
   canManage?: boolean
-  manageHref?: string | null
 }) {
   if (!canManage) {
     return <EmptyActionsCell />
   }
 
-  const resolved = kind === 'bug'
-    ? isBugResolvedStatus(status as BugStatus)
-    : isFeatureResolvedStatus(status as FeatureStatus)
+  const statusButtons = kind === 'bug'
+    ? dashboardBugStatuses.map((nextStatus) => ({
+        value: nextStatus,
+        label: bugStatusActionLabel(nextStatus),
+        active: status === nextStatus
+      }))
+    : dashboardFeatureStatuses.map((nextStatus) => ({
+        value: nextStatus,
+        label: featureStatusActionLabel(nextStatus),
+        active: status === nextStatus
+      }))
 
   return (
-    <div className="flex flex-wrap items-center justify-end gap-2">
-      {manageHref ? <ManageLink href={manageHref} /> : null}
-      <ActionForm
-        kind={kind}
-        id={id}
-        action={resolved ? 'open' : 'resolve'}
-        bugFilter={bugFilter}
-        suggestionFilter={suggestionFilter}
-        size="xs"
-        className="min-w-[4.75rem]"
-      >
-        {resolved ? 'Reopen' : 'Resolve'}
-      </ActionForm>
+    <div className="flex flex-wrap items-center justify-end gap-1.5">
+      {statusButtons.map((button) => (
+        <ActionForm
+          key={button.value}
+          kind={kind}
+          id={id}
+          action={button.value}
+          bugFilter={bugFilter}
+          suggestionFilter={suggestionFilter}
+          active={button.active}
+          disabled={button.active}
+          size="xs"
+          className="min-w-[5rem]"
+        >
+          {button.label}
+        </ActionForm>
+      ))}
       <ActionForm
         kind={kind}
         id={id}
@@ -478,7 +505,7 @@ function DashboardManageActions({
         suggestionFilter={suggestionFilter}
         variant="destructive"
         size="xs"
-        className="min-w-[4.5rem]"
+        className="min-w-[5rem]"
       >
         Delete
       </ActionForm>
@@ -527,15 +554,24 @@ function DashboardAuthControls({
   isAuthenticated = false,
   canManage = false,
   authUrl,
-  logoutUrl
+  logoutUrl,
+  guildName,
+  changeGuildUrl
 }: {
   isAuthenticated?: boolean
   canManage?: boolean
   authUrl?: string | null
   logoutUrl?: string | null
+  guildName?: string
+  changeGuildUrl?: string | null
 }) {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      {guildName ? (
+        <Badge variant="outline" className="rounded-full px-3 py-1 text-xs font-medium text-muted-foreground">
+          {guildName}
+        </Badge>
+      ) : null}
       {isAuthenticated ? (
         <>
           <Badge variant="secondary" className="rounded-full px-3 py-1 text-xs font-medium">
@@ -548,6 +584,11 @@ function DashboardAuthControls({
               'Signed In'
             )}
           </Badge>
+          {changeGuildUrl ? (
+            <Button asChild variant="outline" size="sm">
+              <a href={changeGuildUrl}>Switch Server</a>
+            </Button>
+          ) : null}
           {logoutUrl ? (
             <Button asChild variant="outline" size="sm">
               <a href={logoutUrl}>
@@ -720,7 +761,6 @@ function BugsTable({
                 bugFilter={currentBugFilter}
                 suggestionFilter={currentSuggestionFilter}
                 canManage={canManage}
-                manageHref={bug.message_url}
               />
             </TableCell>
           </TableRow>
@@ -877,7 +917,6 @@ function SuggestionsTable({
                 bugFilter={currentBugFilter}
                 suggestionFilter={currentSuggestionFilter}
                 canManage={canManage}
-                manageHref={feature.message_url}
               />
             </TableCell>
           </TableRow>
@@ -895,7 +934,9 @@ function DashboardDocument({
   isAuthenticated = false,
   canManage = false,
   authUrl,
-  logoutUrl
+  logoutUrl,
+  guildName,
+  changeGuildUrl
 }: DashboardPageInput) {
   return (
     <html lang="en" className="dark">
@@ -903,7 +944,7 @@ function DashboardDocument({
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <link rel="icon" type="image/webp" href={dashboardFaviconHref} />
-        <title>Daggerbrain Feedback</title>
+        <title>Daggerbrain</title>
         <style dangerouslySetInnerHTML={{ __html: dashboardStyles }} />
       </head>
       <body className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(103,232,249,0.14),transparent_28%),linear-gradient(180deg,#081018_0%,#0b1320_100%)] text-foreground">
@@ -925,6 +966,8 @@ function DashboardDocument({
                 canManage={canManage}
                 authUrl={authUrl}
                 logoutUrl={logoutUrl}
+                guildName={guildName}
+                changeGuildUrl={changeGuildUrl}
               />
             </div>
 
@@ -963,4 +1006,56 @@ function DashboardDocument({
 
 export function renderDashboardPage(input: DashboardPageInput): string {
   return `<!doctype html>${renderToStaticMarkup(<DashboardDocument {...input} />)}`
+}
+
+function GuildSelectionDocument({ guilds, logoutUrl }: GuildSelectionPageInput) {
+  return (
+    <html lang="en" className="dark">
+      <head>
+        <meta charSet="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <link rel="icon" type="image/webp" href={dashboardFaviconHref} />
+        <title>Select Server | Daggerbrain</title>
+        <style dangerouslySetInnerHTML={{ __html: dashboardStyles }} />
+      </head>
+      <body className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(103,232,249,0.14),transparent_28%),linear-gradient(180deg,#081018_0%,#0b1320_100%)] text-foreground">
+        <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col justify-center gap-6 px-4 py-10 sm:px-6">
+          <Card className="gap-6 border-border/70 bg-card/95 p-6 shadow-sm">
+            <div className="space-y-2">
+              <p className="text-xs font-semibold tracking-[0.2em] text-muted-foreground uppercase">Dashboard Access</p>
+              <h1 className="text-3xl font-semibold tracking-tight text-foreground">Choose a server</h1>
+              <p className="text-sm text-muted-foreground">
+                Pick the Discord server you want to view in the dashboard. You can switch later from the dashboard header.
+              </p>
+            </div>
+            <div className="grid gap-3">
+              {guilds.map((guild) => (
+                <Card key={guild.id} className="border-border/70 bg-background/60 p-4">
+                  <form method="post" action="/auth/discord/select-guild" className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <input type="hidden" name="guildId" value={guild.id} />
+                    <div className="space-y-1">
+                      <p className="font-medium text-foreground">{guild.name}</p>
+                      <p className="text-xs text-muted-foreground">Server ID: {guild.id}</p>
+                    </div>
+                    <Button type="submit" className="sm:min-w-[8rem]">Open Dashboard</Button>
+                  </form>
+                </Card>
+              ))}
+            </div>
+            {logoutUrl ? (
+              <div className="flex justify-end">
+                <Button asChild variant="outline" size="sm">
+                  <a href={logoutUrl}>Sign Out</a>
+                </Button>
+              </div>
+            ) : null}
+          </Card>
+        </main>
+      </body>
+    </html>
+  )
+}
+
+export function renderGuildSelectionPage(input: GuildSelectionPageInput): string {
+  return `<!doctype html>${renderToStaticMarkup(<GuildSelectionDocument {...input} />)}`
 }

@@ -11,6 +11,7 @@ import {
   getCommandOptionInteger,
   getCommandOptionString,
   getFeatureSubmissionValues,
+  hasDashboardManagePermission,
   hasGuildConfigurationPermission,
   getModalFieldValues,
   getModalUploadedAttachmentUrl,
@@ -18,6 +19,7 @@ import {
   hasManageMessagesPermission,
   parseBugAction,
   parseBugModalCustomId,
+  parseDeleteAction,
   parseDuplicateSelectionCustomId,
   parseFeatureUpvote,
   parsePreflightCustomId,
@@ -25,7 +27,9 @@ import {
 } from '../src/discord/interactions'
 import {
   bugModalResponse,
+  bugManageResponse,
   ephemeralRichMessage,
+  featureManageResponse,
   featureModalResponse,
   myItemsResponse,
   renderBugMessage,
@@ -38,20 +42,45 @@ import type { BugRecord, FeatureRecord } from '../src/types'
 import { notifyBugFollowers as notifyBugFollowerDms, notifyFeatureFollowers as notifyFeatureFollowerDms } from '../src/discord/notifications'
 import { normalizeBugTitle } from '../src/db/bugs'
 import { bugSubmissionSchema } from '../src/validation'
-import { renderDashboardPage } from '../src/ui/dashboard'
+import { renderDashboardPage, renderGuildSelectionPage } from '../src/ui/dashboard'
 
 function toHex(bytes: Uint8Array): string {
   return Array.from(bytes).map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
-async function buildDashboardCookie(secret: string, userId = 'viewer-1'): Promise<string> {
+async function buildDashboardCookie(
+  secret: string,
+  options?: {
+    userId?: string
+    guildId?: string
+    guildName?: string
+    guildPermissions?: string
+  }
+): Promise<string> {
   const token = await createSignedSessionToken(secret, {
-    userId,
+    userId: options?.userId ?? 'viewer-1',
+    guildId: options?.guildId ?? 'guild-1',
+    guildName: options?.guildName ?? 'Guild One',
+    guildPermissions: options?.guildPermissions ?? '0',
     issuedAt: Date.now(),
     expiresAt: Date.now() + 60_000
   })
 
   return `dashboard_session=${token}`
+}
+
+async function buildGuildSelectionCookie(secret: string, userId = 'viewer-1'): Promise<string> {
+  const token = await createSignedSessionToken(secret, {
+    userId,
+    guilds: [
+      { id: 'guild-1', name: 'Guild One', permissions: '0' },
+      { id: 'guild-2', name: 'Guild Two', permissions: String(1n << 5n) }
+    ],
+    issuedAt: Date.now(),
+    expiresAt: Date.now() + 60_000
+  })
+
+  return `dashboard_guild_selection=${token}`
 }
 
 const env = {
@@ -73,6 +102,8 @@ describe('custom id helpers', () => {
     expect(parseBugAction('upvote:12')).toEqual({ action: 'upvote', bugId: 12 })
     expect(parseBugAction('duplicate:7')).toEqual({ action: 'duplicate', bugId: 7 })
     expect(parseFeatureUpvote('feature:upvote:12')).toEqual({ featureId: 12 })
+    expect(parseDeleteAction('bug:delete-action:9')).toEqual({ itemKind: 'bug', itemId: 9 })
+    expect(parseDeleteAction('feature:delete-action:11')).toEqual({ itemKind: 'feature', itemId: 11 })
   })
 
   it('round-trips modal and preflight state', () => {
@@ -114,6 +145,13 @@ describe('authorization helpers', () => {
     expect(hasGuildConfigurationPermission(String(1n << 4n))).toBe(true)
     expect(hasGuildConfigurationPermission(String(1n << 3n))).toBe(true)
     expect(hasGuildConfigurationPermission('0')).toBe(false)
+  })
+
+  it('detects dashboard management permissions', () => {
+    expect(hasDashboardManagePermission(String(1n << 5n))).toBe(true)
+    expect(hasDashboardManagePermission(String(1n << 3n))).toBe(true)
+    expect(hasDashboardManagePermission(String(1n << 4n))).toBe(false)
+    expect(hasDashboardManagePermission('0')).toBe(false)
   })
 })
 
@@ -171,7 +209,7 @@ describe('command helpers', () => {
       'bugs',
       'suggestion',
       'suggestions',
-      'feedback-config',
+      'config',
       'Report Message as Bug',
       'Turn Message into Suggestion'
     ])
@@ -179,7 +217,7 @@ describe('command helpers', () => {
     expect(commands.find((command) => command.name === 'bugs')?.options?.length).toBeGreaterThan(0)
     expect(commands.find((command) => command.name === 'suggestion')?.options).toBeUndefined()
     expect(commands.find((command) => command.name === 'suggestions')?.options?.length).toBeGreaterThan(0)
-    expect(commands.find((command) => command.name === 'feedback-config')?.options?.length).toBe(2)
+    expect(commands.find((command) => command.name === 'config')?.options?.length).toBe(2)
   })
 })
 
@@ -372,6 +410,59 @@ describe('public message builders', () => {
     const section = container.components.find((component) => component.type === ComponentType.Section)
     expect(section?.accessory).toBeUndefined()
   })
+
+  it('includes delete buttons in manage responses', () => {
+    const bugResponse = bugManageResponse({
+      id: 4,
+      title: 'Crash on refresh',
+      title_normalized: 'crash on refresh',
+      description: 'desc',
+      steps: '',
+      expected: '',
+      actual: '',
+      platform: 'WEB',
+      severity: 'MEDIUM',
+      screenshot_url: null,
+      status: 'OPEN',
+      reporter_id: '123',
+      votes_count: 2,
+      duplicate_flags_count: 0,
+      linked_duplicates_count: 0,
+      regressions_count: 0,
+      channel_id: '1',
+      message_id: '2',
+      source_guild_id: 'guild-1',
+      source_channel_id: 'source-channel',
+      source_message_id: 'source-message',
+      related_bug_id: null,
+      relationship_type: null,
+      closed_reason: null,
+      status_note: null,
+      created_at: '2026-03-18T00:00:00Z',
+      updated_at: '2026-03-18T00:00:00Z'
+    })
+    const featureResponse = featureManageResponse({
+      id: 5,
+      title: 'Search bar',
+      description: 'Add search',
+      benefit: '',
+      screenshot_url: null,
+      status: 'OPEN',
+      reporter_id: '456',
+      votes_count: 3,
+      channel_id: '3',
+      message_id: '4',
+      source_guild_id: 'guild-1',
+      source_channel_id: 'source-channel',
+      source_message_id: 'source-message',
+      status_note: null,
+      created_at: '2026-03-18T00:00:00Z',
+      updated_at: '2026-03-18T00:00:00Z'
+    })
+
+    expect(JSON.stringify(bugResponse)).toContain('"label":"Delete"')
+    expect(JSON.stringify(featureResponse)).toContain('"label":"Delete"')
+  })
 })
 
 describe('schemas and normalization', () => {
@@ -463,7 +554,10 @@ describe('dashboard renderer', () => {
     const html = renderDashboardPage({
       currentBugFilter: 'all',
       currentSuggestionFilter: 'all',
+      isAuthenticated: true,
       canManage: true,
+      guildName: 'Guild One',
+      changeGuildUrl: '/auth/discord/start',
       bugs: [
         {
           id: 7,
@@ -509,10 +603,17 @@ describe('dashboard renderer', () => {
 
     expect(html).toContain('Description')
     expect(html).toContain('Actions')
-    expect(html).toContain('Manage')
-    expect(html).toContain('Resolve')
-    expect(html).toContain('Reopen')
+    expect(html).toContain('Acknowledge')
+    expect(html).toContain('In Progress')
+    expect(html).toContain('Fixed')
+    expect(html).toContain('Duplicate')
+    expect(html).toContain('Review')
+    expect(html).toContain('Planned')
+    expect(html).toContain('Shipped')
+    expect(html).toContain('Declined')
     expect(html).toContain('Delete')
+    expect(html).toContain('Guild One')
+    expect(html).toContain('Switch Server')
     expect(html).toContain('data-sort-head')
     expect(html).toContain('https://discord.com/channels/guild/channel/message')
     expect(html).toContain('https://discord.com/channels/guild/feature-channel/feature-message')
@@ -569,9 +670,8 @@ describe('dashboard renderer', () => {
     })
 
     expect(html).toContain('Actions')
-    expect(html).not.toContain('Manage')
-    expect(html).not.toContain('Resolve')
-    expect(html).not.toContain('Reopen')
+    expect(html).not.toContain('Acknowledge')
+    expect(html).not.toContain('Fixed')
     expect(html).not.toContain('Delete')
   })
 
@@ -587,6 +687,21 @@ describe('dashboard renderer', () => {
     expect(html).toContain('colSpan="6"')
     expect(html).toContain('No bugs yet.')
     expect(html).toContain('No suggestions yet.')
+  })
+
+  it('renders the guild selection page', () => {
+    const html = renderGuildSelectionPage({
+      guilds: [
+        { id: 'guild-1', name: 'Guild One', permissions: '0' },
+        { id: 'guild-2', name: 'Guild Two', permissions: String(1n << 5n) }
+      ],
+      logoutUrl: '/auth/logout'
+    })
+
+    expect(html).toContain('Choose a server')
+    expect(html).toContain('Guild One')
+    expect(html).toContain('Guild Two')
+    expect(html).toContain('Open Dashboard')
   })
 })
 
@@ -645,9 +760,33 @@ describe('dashboard routes', () => {
     }
   })
 
-  it('blocks non-moderator dashboard management actions', async () => {
+  it('renders the guild selection page from the temporary selection cookie', async () => {
     const app = createApp()
-    const cookie = await buildDashboardCookie('cookie-secret')
+    const cookie = await buildGuildSelectionCookie('cookie-secret')
+    const response = await app.fetch(
+      new Request('https://example.com/auth/discord/select-guild', {
+        headers: {
+          Cookie: cookie
+        }
+      }),
+      {
+        DB: {} as D1Database,
+        DISCORD_PUBLIC_KEY: 'pk',
+        DISCORD_APPLICATION_ID: 'app-id',
+        DISCORD_TOKEN: 'token',
+        DISCORD_CLIENT_SECRET: 'client-secret',
+        COOKIE_SECRET: 'cookie-secret',
+        PUBLIC_APP_URL: 'https://example.com'
+      }
+    )
+
+    expect(response.status).toBe(200)
+    await expect(response.text()).resolves.toContain('Choose a server')
+  })
+
+  it('blocks dashboard management actions without Administrator or Manage Server', async () => {
+    const app = createApp()
+    const cookie = await buildDashboardCookie('cookie-secret', { guildPermissions: '0' })
     const body = new URLSearchParams({
       kind: 'bug',
       id: '7',

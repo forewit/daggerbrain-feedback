@@ -149,6 +149,16 @@ export class DiscordRestClient {
     await discordRequest<unknown>(this.env, Routes.channelMessage(channelId, messageId), 'PATCH', payload)
   }
 
+  async deleteMessage(channelId: string, messageId: string): Promise<void> {
+    console.log('discord.delete_message', { channelId, messageId })
+    await discordRequest<unknown>(this.env, Routes.channelMessage(channelId, messageId), 'DELETE')
+  }
+
+  async deleteChannel(channelId: string): Promise<void> {
+    console.log('discord.delete_channel', { channelId })
+    await discordRequest<unknown>(this.env, Routes.channel(channelId), 'DELETE')
+  }
+
   async updateThreadTags(channelId: string, appliedTags: string[]): Promise<void> {
     await discordRequest<unknown>(this.env, Routes.channel(channelId), 'PATCH', {
       applied_tags: appliedTags

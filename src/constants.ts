@@ -16,7 +16,9 @@ export const CUSTOM_IDS = {
   manageBugPrefix: 'manage:bug:',
   manageFeaturePrefix: 'manage:feature:',
   bugStatusActionPrefix: 'bug:status-action:',
-  featureStatusActionPrefix: 'feature:status-action:'
+  featureStatusActionPrefix: 'feature:status-action:',
+  bugDeleteActionPrefix: 'bug:delete-action:',
+  featureDeleteActionPrefix: 'feature:delete-action:'
 } as const
 
 export const BUG_MODAL_FIELDS = {

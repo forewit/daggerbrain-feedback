@@ -203,6 +203,18 @@ function isMessageChannel(channelType: ChannelType): boolean {
   return channelType === ChannelType.GuildText || channelType === ChannelType.GuildAnnouncement
 }
 
+function isThreadChannel(channelType: ChannelType): boolean {
+  return (
+    channelType === ChannelType.PublicThread ||
+    channelType === ChannelType.PrivateThread ||
+    channelType === ChannelType.AnnouncementThread
+  )
+}
+
+function isIgnorableDeleteError(error: unknown): boolean {
+  return error instanceof DiscordApiError && error.status === 404
+}
+
 function buildForumStarterMessage(kind: 'bug' | 'feature', title: string, reporterId: string) {
   return {
     content: `${kind === 'bug' ? 'Bug' : 'Suggestion'} intake: ${title}\nReporter: <@${reporterId}>`,
@@ -332,6 +344,79 @@ export async function syncFeatureMessage(env: Env, client: DiscordRestClient, fe
   }
 }
 
+async function deleteReportArtifact(
+  client: DiscordRestClient,
+  item: { channel_id?: string | null; message_id?: string | null }
+): Promise<void> {
+  if (!item.channel_id) {
+    return
+  }
+
+  let channel: DiscordChannelRecord | null = null
+
+  try {
+    channel = await client.getChannel(item.channel_id)
+  } catch (error) {
+    if (isIgnorableDeleteError(error)) {
+      return
+    }
+
+    throw error
+  }
+
+  try {
+    if (isThreadChannel(channel.type)) {
+      await client.deleteChannel(item.channel_id)
+      return
+    }
+
+    if (item.message_id) {
+      await client.deleteMessage(item.channel_id, item.message_id)
+    }
+  } catch (error) {
+    if (isIgnorableDeleteError(error)) {
+      return
+    }
+
+    throw error
+  }
+}
+
+async function deleteSourceMessage(
+  client: DiscordRestClient,
+  item: { source_channel_id?: string | null; source_message_id?: string | null }
+): Promise<void> {
+  if (!item.source_channel_id || !item.source_message_id) {
+    return
+  }
+
+  try {
+    await client.deleteMessage(item.source_channel_id, item.source_message_id)
+  } catch (error) {
+    if (isIgnorableDeleteError(error)) {
+      return
+    }
+
+    throw error
+  }
+}
+
+export async function deleteBugDiscordArtifacts(
+  client: DiscordRestClient,
+  bug: Pick<BugRecord, 'id' | 'channel_id' | 'message_id' | 'source_channel_id' | 'source_message_id'>
+): Promise<void> {
+  await deleteReportArtifact(client, bug)
+  await deleteSourceMessage(client, bug)
+}
+
+export async function deleteFeatureDiscordArtifacts(
+  client: DiscordRestClient,
+  feature: Pick<FeatureRecord, 'id' | 'channel_id' | 'message_id' | 'source_channel_id' | 'source_message_id'>
+): Promise<void> {
+  await deleteReportArtifact(client, feature)
+  await deleteSourceMessage(client, feature)
+}
+
 export function logDiscordApiError(event: string, error: unknown, metadata?: Record<string, unknown>) {
   if (error instanceof DiscordApiError) {
     console.error(event, {
@@ -351,7 +436,7 @@ export function logDiscordApiError(event: string, error: unknown, metadata?: Rec
 
 export function getCreateMessageFailureMessage(kind: 'bug' | 'feature', error: unknown): string {
   if (error instanceof MissingFeedbackChannelError) {
-    return `Saved, but no ${kind === 'bug' ? 'bug' : 'suggestion'} channel is configured for this server. An admin can run /feedback-config set.`
+    return `Saved, but no ${kind === 'bug' ? 'bug' : 'suggestion'} channel is configured for this server. An admin can run /config set.`
   }
 
   if (error instanceof DiscordApiError) {

@@ -512,8 +512,34 @@ export function parseStatusAction(
   return null
 }
 
+export function parseDeleteAction(
+  customId: string | undefined
+): { itemKind: 'bug' | 'feature'; itemId: number } | null {
+  if (!customId) return null
+
+  const mappings = [
+    [CUSTOM_IDS.bugDeleteActionPrefix, 'bug'],
+    [CUSTOM_IDS.featureDeleteActionPrefix, 'feature']
+  ] as const
+
+  for (const [prefix, itemKind] of mappings) {
+    if (customId.startsWith(prefix)) {
+      const itemId = Number(customId.slice(prefix.length))
+      if (!Number.isNaN(itemId) && itemId > 0) {
+        return { itemKind, itemId }
+      }
+    }
+  }
+
+  return null
+}
+
 export function hasManageMessagesPermission(permissions?: string): boolean {
   return hasPermission(permissions, 13n)
+}
+
+export function hasDashboardManagePermission(permissions?: string): boolean {
+  return hasPermission(permissions, 3n) || hasPermission(permissions, 5n)
 }
 
 export function hasGuildConfigurationPermission(permissions?: string): boolean {

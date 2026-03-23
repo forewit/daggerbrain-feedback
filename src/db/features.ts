@@ -112,7 +112,7 @@ export async function getFeatureById(db: D1Database, featureId: number): Promise
 
 export async function listFeatures(
   db: D1Database,
-  options?: { status?: 'active' | 'resolved' | 'all'; sort?: 'top' | 'newest'; limit?: number; reporterId?: string }
+  options?: { status?: 'active' | 'resolved' | 'all'; sort?: 'top' | 'newest'; limit?: number; reporterId?: string; sourceGuildId?: string }
 ): Promise<FeatureSummary[]> {
   const status = options?.status ?? 'active'
   const sort = options?.sort ?? 'top'
@@ -131,6 +131,11 @@ export async function listFeatures(
   if (options?.reporterId) {
     whereClauses.push(`reporter_id = ?`)
     bindValues.push(options.reporterId)
+  }
+
+  if (options?.sourceGuildId) {
+    whereClauses.push('source_guild_id = ?')
+    bindValues.push(options.sourceGuildId)
   }
 
   const where = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : ''

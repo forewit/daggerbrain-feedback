@@ -29,14 +29,20 @@ import { linkBugAsDuplicate, linkBugAsRegression } from './feedback/link-duplica
 import { updateBugLifecycleStatus } from './feedback/update-status'
 import { upvoteBug, upvoteFeature } from './feedback/upvote'
 import {
+  buildDashboardGuildSelectionCookie,
   buildDashboardSessionCookie,
   buildDiscordOauthUrl,
+  clearDashboardGuildSelectionCookie,
   clearDashboardSessionCookie,
   createSignedSessionToken,
   exchangeOauthCode,
+  fetchOauthGuilds,
   fetchOauthUser,
   getCookieValue,
-  verifySignedSessionToken
+  verifySignedSessionToken,
+  type DashboardGuildSelectionPayload,
+  type DashboardSessionPayload,
+  type DiscordOauthGuild
 } from './discord/auth'
 import {
   getCommandOptionInteger,
@@ -47,6 +53,7 @@ import {
   getInteractionUserId,
   getMessageCommandTarget,
   hasAnyRole,
+  hasDashboardManagePermission,
   hasGuildConfigurationPermission,
   hasManageMessagesPermission,
   isApplicationCommandInteraction,
@@ -57,6 +64,7 @@ import {
   isPingInteraction,
   parseBugModalCustomId,
   parseDiscordInteraction,
+  parseDeleteAction,
   parseDuplicateSelectionCustomId,
   parseFeatureModalCustomId,
   parseFeatureUpvote,
@@ -94,6 +102,8 @@ import {
 import {
   createBugReportMessage,
   createFeatureReportMessage,
+  deleteBugDiscordArtifacts,
+  deleteFeatureDiscordArtifacts,
   getCreateMessageFailureMessage,
   logDiscordApiError,
   resolveBugReportCardUrl,
@@ -111,7 +121,7 @@ import {
   featureStatusCommandSchema,
   featureSubmissionSchema
 } from './validation'
-import { renderDashboardPage } from './ui/dashboard'
+import { renderDashboardPage, renderGuildSelectionPage } from './ui/dashboard'
 
 type DashboardBugFilter = 'all' | 'open' | 'resolved'
 type DashboardSuggestionFilter = 'all' | 'open' | 'resolved'
@@ -208,7 +218,7 @@ async function buildFeedbackConfigResponse(env: Env, guildId: string): Promise<A
   const featureSource = settings?.feature_channel_id ? 'guild' : env.FEATURE_CHANNEL_ID ? 'default' : 'unset'
 
   return ephemeralRichMessage([
-    'Feedback channel configuration:',
+    'Channel configuration:',
     `Bug reports: ${formatConfiguredChannel(bugChannelId, bugSource)}`,
     `Suggestions: ${formatConfiguredChannel(featureChannelId, featureSource)}`
   ].join('\n'))
@@ -219,14 +229,33 @@ function responseWithCookie(response: Response, cookieValue: string): Response {
   return response
 }
 
-async function getDashboardSessionUserId(env: Env, cookieHeader: string | null): Promise<string | null> {
+function responseWithCookies(response: Response, cookieValues: string[]): Response {
+  for (const cookieValue of cookieValues) {
+    response.headers.append('Set-Cookie', cookieValue)
+  }
+
+  return response
+}
+
+async function getDashboardSession(env: Env, cookieHeader: string | null): Promise<DashboardSessionPayload | null> {
   if (!env.COOKIE_SECRET) {
     return null
   }
 
   const token = getCookieValue(cookieHeader, 'dashboard_session')
-  const session = await verifySignedSessionToken(env.COOKIE_SECRET, token)
-  return session?.userId ?? null
+  return verifySignedSessionToken<DashboardSessionPayload>(env.COOKIE_SECRET, token)
+}
+
+async function getDashboardGuildSelectionSession(
+  env: Env,
+  cookieHeader: string | null
+): Promise<DashboardGuildSelectionPayload | null> {
+  if (!env.COOKIE_SECRET) {
+    return null
+  }
+
+  const token = getCookieValue(cookieHeader, 'dashboard_guild_selection')
+  return verifySignedSessionToken<DashboardGuildSelectionPayload>(env.COOKIE_SECRET, token)
 }
 
 function isDashboardAuthConfigured(env: Env): boolean {
@@ -235,26 +264,95 @@ function isDashboardAuthConfigured(env: Env): boolean {
 
 async function getDashboardAccessContext(
   env: Env,
-  client: DiscordRestClient,
   cookieHeader: string | null
-): Promise<{ viewerId: string | null; canManage: boolean; authConfigured: boolean }> {
-  const viewerId = await getDashboardSessionUserId(env, cookieHeader)
+): Promise<{ session: DashboardSessionPayload | null; viewerId: string | null; guildId: string | null; guildName: string | null; canManage: boolean; authConfigured: boolean }> {
+  const session = await getDashboardSession(env, cookieHeader)
   const authConfigured = isDashboardAuthConfigured(env)
 
-  if (!viewerId || !env.DISCORD_GUILD_ID || !env.DISCORD_MOD_ROLE_IDS) {
-    return { viewerId, canManage: false, authConfigured }
-  }
-
-  try {
-    const member = await client.getGuildMember(env.DISCORD_GUILD_ID, viewerId)
+  if (!session) {
     return {
-      viewerId,
-      canManage: hasAnyRole(member.roles, env.DISCORD_MOD_ROLE_IDS),
+      session: null,
+      viewerId: null,
+      guildId: null,
+      guildName: null,
+      canManage: false,
       authConfigured
     }
-  } catch {
-    return { viewerId, canManage: false, authConfigured }
   }
+
+  if (!session.guildId || !session.guildName || !session.guildPermissions) {
+    return {
+      session: null,
+      viewerId: null,
+      guildId: null,
+      guildName: null,
+      canManage: false,
+      authConfigured
+    }
+  }
+
+  return {
+    session,
+    viewerId: session.userId,
+    guildId: session.guildId,
+    guildName: session.guildName,
+    canManage: hasDashboardManagePermission(session.guildPermissions),
+    authConfigured
+  }
+}
+
+function createDashboardSessionPayload(
+  userId: string,
+  guild: DiscordOauthGuild,
+  now = Date.now()
+): DashboardSessionPayload {
+  return {
+    userId,
+    guildId: guild.id,
+    guildName: guild.name,
+    guildPermissions: guild.permissions,
+    issuedAt: now,
+    expiresAt: now + 7 * 24 * 60 * 60 * 1000
+  }
+}
+
+function createGuildSelectionPayload(
+  userId: string,
+  guilds: DiscordOauthGuild[],
+  now = Date.now()
+): DashboardGuildSelectionPayload {
+  return {
+    userId,
+    guilds,
+    issuedAt: now,
+    expiresAt: now + 10 * 60 * 1000
+  }
+}
+
+function findSelectedGuild(guilds: DiscordOauthGuild[], guildId: string): DiscordOauthGuild | null {
+  return guilds.find((guild) => guild.id === guildId) ?? null
+}
+
+function buildDashboardAuthRedirect(access: { authConfigured: boolean }): string {
+  return access.authConfigured ? '/auth/discord/start' : '/dashboard'
+}
+
+async function getAuthorizedBugForDashboard(env: Env, bugId: number, guildId: string) {
+  const bug = await getBugById(env.DB, bugId)
+  if (!bug || bug.source_guild_id !== guildId) {
+    return null
+  }
+
+  return bug
+}
+
+async function getAuthorizedFeatureForDashboard(env: Env, featureId: number, guildId: string) {
+  const feature = await getFeatureById(env.DB, featureId)
+  if (!feature || feature.source_guild_id !== guildId) {
+    return null
+  }
+
+  return feature
 }
 
 function buildCreatedMessage(kind: 'bug' | 'feature', id: number, messageUrl: string | null): string {
@@ -492,7 +590,7 @@ async function handleFeedbackConfigCommand(
   }
 
   if (!hasGuildConfigurationPermission(interaction.member?.permissions)) {
-    return ephemeralMessage('You need Manage Server or Manage Channels permission to configure feedback channels.')
+    return ephemeralMessage('You need Manage Server or Manage Channels permission to configure bug and suggestion channels.')
   }
 
   const path = getCommandPath(interaction)
@@ -797,7 +895,7 @@ async function handleCommand(env: Env, client: DiscordRestClient, interaction: A
     return handleFeatureReportCommand(env, client, interaction)
   }
 
-  if (path[0] === 'feedback-config') {
+  if (path[0] === 'config') {
     return handleFeedbackConfigCommand(env, client, interaction)
   }
 
@@ -1173,6 +1271,45 @@ async function handleComponent(env: Env, client: DiscordRestClient, interaction:
     )
   }
 
+  const deleteAction = parseDeleteAction(interaction.data.custom_id)
+  if (deleteAction) {
+    if (!isModeratorInteraction(interaction, env)) {
+      return ephemeralMessage('Only moderators can delete bugs or suggestions.')
+    }
+
+    if (deleteAction.itemKind === 'bug') {
+      const bug = await getBugById(env.DB, deleteAction.itemId)
+      if (!bug) {
+        return ephemeralMessage('Bug not found.')
+      }
+
+      try {
+        await deleteBugDiscordArtifacts(client, bug)
+      } catch (error) {
+        logDiscordApiError('discord.component_bug_delete_failed', error, { bugId: bug.id })
+        return ephemeralMessage('Failed to delete the bug messages from Discord.')
+      }
+
+      await deleteBug(env.DB, bug.id)
+      return ephemeralMessage(`Deleted bug #${bug.id} and removed its Discord messages.`)
+    }
+
+    const feature = await getFeatureById(env.DB, deleteAction.itemId)
+    if (!feature) {
+      return ephemeralMessage('Suggestion not found.')
+    }
+
+    try {
+      await deleteFeatureDiscordArtifacts(client, feature)
+    } catch (error) {
+      logDiscordApiError('discord.component_feature_delete_failed', error, { featureId: feature.id })
+      return ephemeralMessage('Failed to delete the suggestion messages from Discord.')
+    }
+
+    await deleteFeature(env.DB, feature.id)
+    return ephemeralMessage(`Deleted suggestion #${feature.id} and removed its Discord messages.`)
+  }
+
   const featureVote = parseFeatureUpvote(interaction.data.custom_id)
   if (featureVote) {
     const result = await upvoteFeature(env.DB, featureVote.featureId, userId)
@@ -1199,22 +1336,10 @@ async function handleComponent(env: Env, client: DiscordRestClient, interaction:
 }
 
 async function handleDashboardBugAction(env: Env, client: DiscordRestClient, bugId: number, action: string) {
-  if (action === 'resolve') {
-    const result = await updateBugLifecycleStatus(env.DB, bugId, 'FIXED')
-    if (!result.ok) {
-      return result
-    }
+  const bugStatusActions = new Set<BugStatus>(['OPEN', 'ACKNOWLEDGED', 'IN_PROGRESS', 'FIXED', 'CLOSED', 'DUPLICATE'])
 
-    await syncBugMessage(env, client, result.bugId)
-    const bug = await getBugById(env.DB, result.bugId)
-    if (bug) {
-      await notifyBugFollowers(env, client, bug)
-    }
-    return { ok: true as const }
-  }
-
-  if (action === 'open') {
-    const result = await updateBugLifecycleStatus(env.DB, bugId, 'OPEN')
+  if (bugStatusActions.has(action as BugStatus)) {
+    const result = await updateBugLifecycleStatus(env.DB, bugId, action as BugStatus)
     if (!result.ok) {
       return result
     }
@@ -1233,8 +1358,23 @@ async function handleDashboardBugAction(env: Env, client: DiscordRestClient, bug
       return { ok: false as const, message: 'Bug not found.' }
     }
 
+    try {
+      await deleteBugDiscordArtifacts(client, bug)
+    } catch (error) {
+      logDiscordApiError('discord.delete_bug_artifacts_failed', error, { bugId })
+      return { ok: false as const, message: 'Failed to delete the bug messages from Discord.' }
+    }
+
     await deleteBug(env.DB, bugId)
     return { ok: true as const }
+  }
+
+  if (action === 'resolve') {
+    return handleDashboardBugAction(env, client, bugId, 'FIXED')
+  }
+
+  if (action === 'open') {
+    return handleDashboardBugAction(env, client, bugId, 'OPEN')
   }
 
   return { ok: false as const, message: 'Unsupported bug action.' }
@@ -1246,29 +1386,43 @@ async function handleDashboardFeedbackAction(env: Env, client: DiscordRestClient
     return { ok: false as const, message: 'Suggestion not found.' }
   }
 
-  if (action === 'resolve') {
-    await updateFeatureStatus(env.DB, featureId, 'CLOSED')
-    await syncFeatureMessage(env, client, featureId)
-    const updated = await getFeatureById(env.DB, featureId)
-    if (updated) {
-      await notifyFeatureFollowers(env, client, updated)
-    }
-    return { ok: true as const }
-  }
+  const featureStatusActions = new Set<FeatureStatus>([
+    'OPEN',
+    'UNDER_REVIEW',
+    'PLANNED',
+    'IN_PROGRESS',
+    'SHIPPED',
+    'DECLINED',
+    'CLOSED'
+  ])
 
-  if (action === 'open') {
-    await updateFeatureStatus(env.DB, featureId, 'OPEN')
-    await syncFeatureMessage(env, client, featureId)
-    const updated = await getFeatureById(env.DB, featureId)
-    if (updated) {
-      await notifyFeatureFollowers(env, client, updated)
+  if (featureStatusActions.has(action as FeatureStatus)) {
+    const result = await updateFeatureLifecycleStatus(env, client, featureId, action as FeatureStatus)
+    if (!result.ok) {
+      return result
     }
+
     return { ok: true as const }
   }
 
   if (action === 'delete') {
+    try {
+      await deleteFeatureDiscordArtifacts(client, feature)
+    } catch (error) {
+      logDiscordApiError('discord.delete_feature_artifacts_failed', error, { featureId })
+      return { ok: false as const, message: 'Failed to delete the suggestion messages from Discord.' }
+    }
+
     await deleteFeature(env.DB, featureId)
     return { ok: true as const }
+  }
+
+  if (action === 'resolve') {
+    return handleDashboardFeedbackAction(env, client, featureId, 'CLOSED')
+  }
+
+  if (action === 'open') {
+    return handleDashboardFeedbackAction(env, client, featureId, 'OPEN')
   }
 
   return { ok: false as const, message: 'Unsupported suggestion action.' }
@@ -1300,7 +1454,7 @@ export function createApp() {
       return c.redirect('/dashboard')
     }
 
-    const verifiedState = await verifySignedSessionToken(c.env.COOKIE_SECRET, state)
+    const verifiedState = await verifySignedSessionToken<{ userId: string; issuedAt: number; expiresAt: number }>(c.env.COOKIE_SECRET, state)
     if (!verifiedState) {
       return c.redirect('/dashboard')
     }
@@ -1308,20 +1462,68 @@ export function createApp() {
     try {
       const token = await exchangeOauthCode(c.env, code)
       const user = await fetchOauthUser(token.access_token)
-      const sessionToken = await createSignedSessionToken(c.env.COOKIE_SECRET, {
-        userId: user.id,
-        issuedAt: Date.now(),
-        expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000
-      })
+      const guilds = (await fetchOauthGuilds(token.access_token)).sort((left, right) => left.name.localeCompare(right.name))
 
-      return responseWithCookie(c.redirect('/dashboard'), buildDashboardSessionCookie(sessionToken))
+      if (guilds.length === 0) {
+        return c.text('No Discord servers were found for this account.', 403)
+      }
+
+      if (guilds.length === 1) {
+        const sessionToken = await createSignedSessionToken(c.env.COOKIE_SECRET, createDashboardSessionPayload(user.id, guilds[0]))
+        return responseWithCookies(c.redirect('/dashboard'), [
+          buildDashboardSessionCookie(sessionToken),
+          clearDashboardGuildSelectionCookie()
+        ])
+      }
+
+      const selectionToken = await createSignedSessionToken(c.env.COOKIE_SECRET, createGuildSelectionPayload(user.id, guilds))
+      return responseWithCookies(c.redirect('/auth/discord/select-guild'), [
+        buildDashboardGuildSelectionCookie(selectionToken),
+        clearDashboardSessionCookie()
+      ])
     } catch (error) {
       console.error('dashboard.oauth_callback_failed', error)
       return c.redirect('/dashboard')
     }
   })
 
-  app.get('/auth/logout', (c) => responseWithCookie(c.redirect('/dashboard'), clearDashboardSessionCookie()))
+  app.get('/auth/discord/select-guild', async (c) => {
+    const selection = await getDashboardGuildSelectionSession(c.env, c.req.header('Cookie') ?? null)
+    if (!selection) {
+      return c.redirect('/dashboard')
+    }
+
+    return c.html(renderGuildSelectionPage({
+      guilds: selection.guilds,
+      logoutUrl: '/auth/logout'
+    }))
+  })
+
+  app.post('/auth/discord/select-guild', async (c) => {
+    if (!c.env.COOKIE_SECRET) {
+      return c.redirect('/dashboard')
+    }
+
+    const cookieHeader = c.req.header('Cookie') ?? null
+    const selection = await getDashboardGuildSelectionSession(c.env, cookieHeader)
+    const guildId = String((await c.req.formData()).get('guildId') ?? '')
+    const selectedGuild = selection ? findSelectedGuild(selection.guilds, guildId) : null
+
+    if (!selection || !selectedGuild) {
+      return c.redirect('/auth/discord/start')
+    }
+
+    const sessionToken = await createSignedSessionToken(c.env.COOKIE_SECRET, createDashboardSessionPayload(selection.userId, selectedGuild))
+    return responseWithCookies(c.redirect('/dashboard'), [
+      buildDashboardSessionCookie(sessionToken),
+      clearDashboardGuildSelectionCookie()
+    ])
+  })
+
+  app.get('/auth/logout', (c) => responseWithCookies(c.redirect('/dashboard'), [
+    clearDashboardSessionCookie(),
+    clearDashboardGuildSelectionCookie()
+  ]))
 
   app.post('/commands/register', async (c) => {
     if (c.env.COMMANDS_REGISTER_SECRET) {
@@ -1341,8 +1543,8 @@ export function createApp() {
   })
 
   app.get('/api/bugs', async (c) => {
-    const access = await getDashboardAccessContext(c.env, new DiscordRestClient(c.env), c.req.header('Cookie') ?? null)
-    if (!access.viewerId) {
+    const access = await getDashboardAccessContext(c.env, c.req.header('Cookie') ?? null)
+    if (!access.viewerId || !access.guildId) {
       return c.json({ error: 'Unauthorized' }, 401)
     }
 
@@ -1351,29 +1553,29 @@ export function createApp() {
       sort: c.req.query('sort') ?? 'top'
     })
 
-    return c.json({ bugs: await listBugs(c.env.DB, query.status, query.sort) })
+    return c.json({ bugs: await listBugs(c.env.DB, query.status, query.sort, { sourceGuildId: access.guildId }) })
   })
 
   app.get('/api/features', async (c) => {
-    const access = await getDashboardAccessContext(c.env, new DiscordRestClient(c.env), c.req.header('Cookie') ?? null)
-    if (!access.viewerId) {
+    const access = await getDashboardAccessContext(c.env, c.req.header('Cookie') ?? null)
+    if (!access.viewerId || !access.guildId) {
       return c.json({ error: 'Unauthorized' }, 401)
     }
 
     const status = c.req.query('status') === 'resolved' ? 'resolved' : c.req.query('status') === 'all' ? 'all' : 'active'
     const sort = c.req.query('sort') === 'newest' ? 'newest' : 'top'
-    return c.json({ features: await listFeatures(c.env.DB, { status, sort, limit: 50 }) })
+    return c.json({ features: await listFeatures(c.env.DB, { status, sort, limit: 50, sourceGuildId: access.guildId }) })
   })
 
   app.get('/api/suggestions', async (c) => {
-    const access = await getDashboardAccessContext(c.env, new DiscordRestClient(c.env), c.req.header('Cookie') ?? null)
-    if (!access.viewerId) {
+    const access = await getDashboardAccessContext(c.env, c.req.header('Cookie') ?? null)
+    if (!access.viewerId || !access.guildId) {
       return c.json({ error: 'Unauthorized' }, 401)
     }
 
     const status = c.req.query('status') === 'resolved' ? 'resolved' : c.req.query('status') === 'all' ? 'all' : 'active'
     const sort = c.req.query('sort') === 'newest' ? 'newest' : 'top'
-    return c.json({ suggestions: await listFeatures(c.env.DB, { status, sort, limit: 50 }) })
+    return c.json({ suggestions: await listFeatures(c.env.DB, { status, sort, limit: 50, sourceGuildId: access.guildId }) })
   })
 
   app.get('/dashboard', async (c) => {
@@ -1381,9 +1583,9 @@ export function createApp() {
     const suggestionFilter = getDashboardSuggestionFilter(c.req.query('suggestionStatus') ?? c.req.query('feedbackStatus'))
     const cookieHeader = c.req.header('Cookie') ?? null
     const client = new DiscordRestClient(c.env)
-    const access = await getDashboardAccessContext(c.env, client, cookieHeader)
+    const access = await getDashboardAccessContext(c.env, cookieHeader)
 
-    if (!access.viewerId) {
+    if (!access.viewerId || !access.guildId) {
       if (!access.authConfigured) {
         return c.text('Dashboard authentication is not configured.', 501)
       }
@@ -1392,8 +1594,8 @@ export function createApp() {
     }
 
     const [rawBugs, rawFeatures] = await Promise.all([
-      listBugs(c.env.DB, mapBugFilterToStatus(bugFilter), 'newest'),
-      listFeatures(c.env.DB, { status: mapSuggestionFilterToStatus(suggestionFilter), sort: 'newest', limit: 200 })
+      listBugs(c.env.DB, mapBugFilterToStatus(bugFilter), 'newest', { sourceGuildId: access.guildId }),
+      listFeatures(c.env.DB, { status: mapSuggestionFilterToStatus(suggestionFilter), sort: 'newest', limit: 200, sourceGuildId: access.guildId })
     ])
 
     let followedBugIds = new Set<number>()
@@ -1444,7 +1646,9 @@ export function createApp() {
         canManage: access.canManage,
         isAuthenticated: true,
         authUrl: null,
-        logoutUrl: '/auth/logout'
+        logoutUrl: '/auth/logout',
+        guildName: access.guildName ?? undefined,
+        changeGuildUrl: '/auth/discord/start'
       })
     )
   })
@@ -1460,18 +1664,18 @@ export function createApp() {
       String(formData.get('suggestionStatus') ?? formData.get('feedbackStatus') ?? 'all')
     )
     const cookieHeader = c.req.header('Cookie') ?? null
-    const access = await getDashboardAccessContext(c.env, client, cookieHeader)
+    const access = await getDashboardAccessContext(c.env, cookieHeader)
 
     if (!Number.isInteger(id) || id <= 0) {
       return c.redirect(buildDashboardUrl(bugFilter, suggestionFilter))
     }
 
-    if ((action === 'upvote' || action === 'follow') && !access.viewerId) {
+    if ((action === 'upvote' || action === 'follow') && (!access.viewerId || !access.guildId)) {
       if (!access.authConfigured) {
         return c.text('Dashboard authentication is not configured.', 501)
       }
 
-      return c.redirect('/auth/discord/start')
+      return c.redirect(buildDashboardAuthRedirect(access))
     }
 
     if (action !== 'upvote' && action !== 'follow' && !access.canManage) {
@@ -1481,7 +1685,10 @@ export function createApp() {
     let result: { ok: true } | { ok: false; message: string }
 
     if (kind === 'bug') {
-      if (action === 'upvote') {
+      const bug = access.guildId ? await getAuthorizedBugForDashboard(c.env, id, access.guildId) : null
+      if (!bug) {
+        result = { ok: false as const, message: 'Bug not found.' }
+      } else if (action === 'upvote') {
         const upvoteResult = await upvoteBug(c.env.DB, id, access.viewerId as string)
         if (!upvoteResult.ok) {
           result = upvoteResult
@@ -1502,7 +1709,10 @@ export function createApp() {
         result = await handleDashboardBugAction(c.env, client, id, action)
       }
     } else if (kind === 'feedback' || kind === 'suggestion') {
-      if (action === 'upvote') {
+      const feature = access.guildId ? await getAuthorizedFeatureForDashboard(c.env, id, access.guildId) : null
+      if (!feature) {
+        result = { ok: false as const, message: 'Suggestion not found.' }
+      } else if (action === 'upvote') {
         const upvoteResult = await upvoteFeature(c.env.DB, id, access.viewerId as string)
         if (!upvoteResult.ok) {
           result = upvoteResult

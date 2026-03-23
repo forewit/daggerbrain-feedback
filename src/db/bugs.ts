@@ -229,7 +229,7 @@ export async function listBugs(
   db: D1Database,
   status: 'open' | 'closed' | 'all',
   sort: 'top' | 'newest',
-  options?: { reporterId?: string; limit?: number }
+  options?: { reporterId?: string; limit?: number; sourceGuildId?: string }
 ): Promise<BugSummary[]> {
   const whereClauses: string[] = []
   const bindValues: Array<string | number> = []
@@ -245,6 +245,11 @@ export async function listBugs(
   if (options?.reporterId) {
     whereClauses.push(`b.reporter_id = ?`)
     bindValues.push(options.reporterId)
+  }
+
+  if (options?.sourceGuildId) {
+    whereClauses.push('b.source_guild_id = ?')
+    bindValues.push(options.sourceGuildId)
   }
 
   const where = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : ''

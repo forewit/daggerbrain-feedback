@@ -1,9 +1,26 @@
 import type { Env } from '../types'
 
-interface DashboardSessionPayload {
-  userId: string
+interface ExpiringSessionPayload {
   issuedAt: number
   expiresAt: number
+}
+
+export interface DashboardSessionPayload extends ExpiringSessionPayload {
+  userId: string
+  guildId: string
+  guildName: string
+  guildPermissions: string
+}
+
+export interface DashboardGuildSelectionPayload extends ExpiringSessionPayload {
+  userId: string
+  guilds: DiscordOauthGuild[]
+}
+
+export interface DiscordOauthGuild {
+  id: string
+  name: string
+  permissions: string
 }
 
 function toBase64Url(bytes: Uint8Array): string {
@@ -34,13 +51,13 @@ async function signValue(secret: string, value: string): Promise<string> {
   return toBase64Url(new Uint8Array(signature))
 }
 
-export async function createSignedSessionToken(secret: string, payload: DashboardSessionPayload): Promise<string> {
+export async function createSignedSessionToken<T extends ExpiringSessionPayload>(secret: string, payload: T): Promise<string> {
   const encodedPayload = toBase64Url(new TextEncoder().encode(JSON.stringify(payload)))
   const signature = await signValue(secret, encodedPayload)
   return `${encodedPayload}.${signature}`
 }
 
-export async function verifySignedSessionToken(secret: string, token: string | undefined): Promise<DashboardSessionPayload | null> {
+export async function verifySignedSessionToken<T extends ExpiringSessionPayload>(secret: string, token: string | undefined): Promise<T | null> {
   if (!token) return null
 
   const [encodedPayload, signature] = token.split('.')
@@ -50,7 +67,7 @@ export async function verifySignedSessionToken(secret: string, token: string | u
   if (signature !== expectedSignature) return null
 
   try {
-    const payload = JSON.parse(new TextDecoder().decode(fromBase64Url(encodedPayload))) as DashboardSessionPayload
+    const payload = JSON.parse(new TextDecoder().decode(fromBase64Url(encodedPayload))) as T
     if (payload.expiresAt <= Date.now()) {
       return null
     }
@@ -61,12 +78,24 @@ export async function verifySignedSessionToken(secret: string, token: string | u
   }
 }
 
+function buildCookie(name: string, token: string, maxAge: number): string {
+  return `${name}=${token}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${maxAge}`
+}
+
 export function buildDashboardSessionCookie(token: string): string {
-  return `dashboard_session=${token}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=604800`
+  return buildCookie('dashboard_session', token, 604800)
 }
 
 export function clearDashboardSessionCookie(): string {
   return 'dashboard_session=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0'
+}
+
+export function buildDashboardGuildSelectionCookie(token: string): string {
+  return buildCookie('dashboard_guild_selection', token, 600)
+}
+
+export function clearDashboardGuildSelectionCookie(): string {
+  return 'dashboard_guild_selection=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0'
 }
 
 export function getCookieValue(cookieHeader: string | null, name: string): string | undefined {
@@ -91,7 +120,7 @@ export function buildDiscordOauthUrl(env: Env, state: string): string {
     client_id: env.DISCORD_APPLICATION_ID,
     redirect_uri: redirectUri,
     response_type: 'code',
-    scope: 'identify',
+    scope: 'identify guilds',
     state
   })
 
@@ -137,4 +166,23 @@ export async function fetchOauthUser(accessToken: string): Promise<{ id: string 
   }
 
   return (await response.json()) as { id: string }
+}
+
+export async function fetchOauthGuilds(accessToken: string): Promise<DiscordOauthGuild[]> {
+  const response = await fetch('https://discord.com/api/v10/users/@me/guilds', {
+    headers: {
+      Authorization: `Bearer ${accessToken}`
+    }
+  })
+
+  if (!response.ok) {
+    throw new Error(`Discord OAuth guild fetch failed with ${response.status}`)
+  }
+
+  const guilds = await response.json() as Array<{ id: string; name: string; permissions?: string | null }>
+  return guilds.map((guild) => ({
+    id: guild.id,
+    name: guild.name,
+    permissions: guild.permissions ?? '0'
+  }))
 }
