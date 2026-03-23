@@ -12,14 +12,22 @@ export interface Env {
   DISCORD_APPLICATION_ID: string
   DISCORD_TOKEN: string
   DISCORD_CLIENT_SECRET?: string
-  BUG_REPORT_CHANNEL_ID: string
-  FEATURE_CHANNEL_ID: string
+  BUG_REPORT_CHANNEL_ID?: string
+  FEATURE_CHANNEL_ID?: string
   PUBLIC_APP_URL?: string
   DISCORD_MOD_ROLE_IDS?: string
   DISCORD_DEV_GUILD_ID?: string
   DISCORD_GUILD_ID?: string
   COOKIE_SECRET?: string
   COMMANDS_REGISTER_SECRET?: string
+}
+
+export interface GuildFeedbackSettings {
+  guild_id: string
+  bug_report_channel_id: string | null
+  feature_channel_id: string | null
+  created_at: string
+  updated_at: string
 }
 
 export interface BugRecord {
@@ -116,6 +124,9 @@ export interface BugPreflightMatch {
   id: number
   title: string
   status: BugStatus
+  channel_id?: string | null
+  message_id?: string | null
+  message_url?: string | null
 }
 
 export interface FeatureRecord {

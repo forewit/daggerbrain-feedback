@@ -400,11 +400,11 @@ export function buildFeatureModalCustomId(
   sourceChannelId: string | null,
   sourceMessageId: string | null
 ): string {
-  if (!sourceGuildId || !sourceChannelId || !sourceMessageId) {
+  if (!sourceGuildId || !sourceChannelId) {
     return CUSTOM_IDS.featureModal
   }
 
-  return `${CUSTOM_IDS.featureModalPrefix}${sourceGuildId}:${sourceChannelId}:${sourceMessageId}`
+  return `${CUSTOM_IDS.featureModalPrefix}${sourceGuildId}:${sourceChannelId}:${sourceMessageId ?? '0'}`
 }
 
 export function parseFeatureModalCustomId(
@@ -422,11 +422,15 @@ export function parseFeatureModalCustomId(
 
   const payload = customId.slice(CUSTOM_IDS.featureModalPrefix.length)
   const [sourceGuildId, sourceChannelId, sourceMessageId] = payload.split(':')
-  if (!sourceGuildId || !sourceChannelId || !sourceMessageId) {
+  if (!sourceGuildId || !sourceChannelId) {
     return null
   }
 
-  return { sourceGuildId, sourceChannelId, sourceMessageId }
+  return {
+    sourceGuildId,
+    sourceChannelId,
+    sourceMessageId: sourceMessageId && sourceMessageId !== '0' ? sourceMessageId : null
+  }
 }
 
 export function parseFeatureUpvote(customId: string | undefined): { featureId: number } | null {
@@ -509,10 +513,18 @@ export function parseStatusAction(
 }
 
 export function hasManageMessagesPermission(permissions?: string): boolean {
+  return hasPermission(permissions, 13n)
+}
+
+export function hasGuildConfigurationPermission(permissions?: string): boolean {
+  return hasPermission(permissions, 3n) || hasPermission(permissions, 4n) || hasPermission(permissions, 5n)
+}
+
+function hasPermission(permissions: string | undefined, bit: bigint): boolean {
   if (!permissions) return false
   const permissionValue = BigInt(permissions)
-  const manageMessages = 1n << 13n
-  return (permissionValue & manageMessages) === manageMessages
+  const permission = 1n << bit
+  return (permissionValue & permission) === permission
 }
 
 export function hasAnyRole(memberRoles: string[] | undefined, configuredRoles: string | undefined): boolean {

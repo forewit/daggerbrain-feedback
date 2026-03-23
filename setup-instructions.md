@@ -28,9 +28,16 @@ Set secrets with Wrangler:
 npx wrangler secret put DISCORD_PUBLIC_KEY
 npx wrangler secret put DISCORD_APPLICATION_ID
 npx wrangler secret put DISCORD_TOKEN
+```
+
+Optional fallback secrets:
+
+```bash
 npx wrangler secret put BUG_REPORT_CHANNEL_ID
 npx wrangler secret put FEATURE_CHANNEL_ID
 ```
+
+If you skip the fallback channel secrets, a server admin can configure per-server intake channels in Discord with `/feedback-config set`.
 
 Optional non-secret variable in `wrangler.toml`:
 
@@ -97,7 +104,7 @@ https://<your-worker-domain>/interactions
 
 Ensure the application is installed in the server with both the `bot` and `applications.commands` scopes. Slash commands can work without the bot user being able to post, so confirm the bot actually appears in the server member list.
 
-Ensure the bot can access the configured bug and feature report channels:
+Ensure the bot can access whichever bug and suggestion channels you configure, whether through fallback env vars or `/feedback-config set`:
 
 - `View Channel`
 - `Send Messages`

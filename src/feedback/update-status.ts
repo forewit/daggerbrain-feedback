@@ -14,7 +14,7 @@ export async function updateBugLifecycleStatus(
   options?: { note?: string | null }
 ): Promise<
   | { ok: true; bugId: number; previousStatus: BugStatus; nextStatus: BugStatus }
-  | { ok: false; message: string }
+  | { ok: false; message: string; bugId?: number }
 > {
   const bug = await getBugById(db, bugId)
   if (!bug) {
@@ -22,7 +22,7 @@ export async function updateBugLifecycleStatus(
   }
 
   if (bug.status === nextStatus) {
-    return { ok: false, message: `Bug #${bug.id} is already ${bug.status}.` }
+    return { ok: false, message: `Bug #${bug.id} is already ${bug.status}.`, bugId: bug.id }
   }
 
   await updateBugStatus(db, bug.id, nextStatus, {

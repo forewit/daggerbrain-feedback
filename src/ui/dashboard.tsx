@@ -222,6 +222,14 @@ function featureStatusOrder(status: FeatureStatus): number {
   return 7
 }
 
+function isBugResolvedStatus(status: BugStatus): boolean {
+  return status === 'FIXED' || status === 'CLOSED' || status === 'DUPLICATE'
+}
+
+function isFeatureResolvedStatus(status: FeatureStatus): boolean {
+  return status === 'SHIPPED' || status === 'DECLINED' || status === 'CLOSED'
+}
+
 function StatusBadge({ label, className }: { label: string; className: string }) {
   return (
     <Badge
@@ -272,14 +280,20 @@ function ActionForm({
   bugFilter,
   suggestionFilter,
   active = false,
+  variant = active ? 'default' : 'outline',
+  size = 'sm',
+  className,
   children
 }: {
   kind: DashboardItemKind
   id: number
-  action: 'upvote' | 'follow'
+  action: 'upvote' | 'follow' | 'open' | 'resolve' | 'delete'
   bugFilter: DashboardBugFilter
   suggestionFilter: DashboardSuggestionFilter
   active?: boolean
+  variant?: 'default' | 'outline' | 'destructive'
+  size?: 'xs' | 'sm'
+  className?: string
   children: ReactNode
 }) {
   return (
@@ -289,7 +303,7 @@ function ActionForm({
       <input type="hidden" name="action" value={action} />
       <input type="hidden" name="bugStatus" value={bugFilter} />
       <input type="hidden" name="suggestionStatus" value={suggestionFilter} />
-      <Button type="submit" size="sm" variant={active ? 'default' : 'outline'} className="min-w-[5.5rem] justify-center">
+      <Button type="submit" size={size} variant={variant} className={cn('justify-center', className)}>
         {children}
       </Button>
     </form>
@@ -377,6 +391,20 @@ function ItemTitle({ title, href }: { title: string; href?: string | null }) {
   )
 }
 
+function ItemKey({ id, href }: { id: number; href?: string | null }) {
+  const content = `#${id}`
+
+  if (!href) {
+    return <span>{content}</span>
+  }
+
+  return (
+    <a href={href} target="_blank" rel="noreferrer" className="hover:underline">
+      {content}
+    </a>
+  )
+}
+
 function ManageLink({ href }: { href: string }) {
   return (
     <Button asChild variant="link" size="sm" className="h-auto p-0 text-xs text-muted-foreground">
@@ -384,6 +412,77 @@ function ManageLink({ href }: { href: string }) {
         Manage
       </a>
     </Button>
+  )
+}
+
+function ActionsTableHead() {
+  return (
+    <TableHead className="w-[16rem] text-right text-xs font-semibold tracking-[0.16em] text-muted-foreground uppercase">
+      Actions
+    </TableHead>
+  )
+}
+
+function EmptyActionsCell() {
+  return (
+    <div className="min-h-8" aria-hidden="true">
+      &nbsp;
+    </div>
+  )
+}
+
+function DashboardManageActions({
+  kind,
+  id,
+  status,
+  bugFilter,
+  suggestionFilter,
+  canManage = false,
+  manageHref
+}: {
+  kind: DashboardItemKind
+  id: number
+  status: BugStatus | FeatureStatus
+  bugFilter: DashboardBugFilter
+  suggestionFilter: DashboardSuggestionFilter
+  canManage?: boolean
+  manageHref?: string | null
+}) {
+  if (!canManage) {
+    return <EmptyActionsCell />
+  }
+
+  const resolved = kind === 'bug'
+    ? isBugResolvedStatus(status as BugStatus)
+    : isFeatureResolvedStatus(status as FeatureStatus)
+
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      {manageHref ? <ManageLink href={manageHref} /> : null}
+      <ActionForm
+        kind={kind}
+        id={id}
+        action={resolved ? 'open' : 'resolve'}
+        bugFilter={bugFilter}
+        suggestionFilter={suggestionFilter}
+        size="xs"
+        className="min-w-[4.75rem]"
+      >
+        {resolved ? 'Reopen' : 'Resolve'}
+      </ActionForm>
+      <ActionForm
+        kind={kind}
+        id={id}
+        action="delete"
+        bugFilter={bugFilter}
+        suggestionFilter={suggestionFilter}
+        variant="destructive"
+        size="xs"
+        className="min-w-[4.5rem]"
+      >
+        Delete
+      </ActionForm>
+    </div>
   )
 }
 
@@ -513,11 +612,12 @@ function BugsTable({
               className="w-[8rem]"
               centered
             />
+            <ActionsTableHead />
           </TableRow>
         </TableHeader>
         <TableBody>
           <TableRow>
-            <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
+            <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
               No bugs yet.
             </TableCell>
           </TableRow>
@@ -549,6 +649,7 @@ function BugsTable({
             className="w-[8rem]"
             centered
           />
+          <ActionsTableHead />
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -562,17 +663,18 @@ function BugsTable({
             data-sort-upvotes={String(bug.votes_count)}
             data-sort-follows={String(bug.follower_count ?? 0)}
           >
-            <TableCell className="align-top text-sm font-semibold text-foreground whitespace-nowrap">𖢥 #{bug.id}</TableCell>
+            <TableCell className="align-top text-sm font-semibold text-foreground whitespace-nowrap">
+              🐞 <ItemKey id={bug.id} href={bug.message_url} />
+            </TableCell>
             <TableCell className="align-top">
               <StatusBadge label={bugStatusLabel(bug.status)} className={bugStatusBadgeClass(bug.status)} />
             </TableCell>
             <TableCell className="align-top whitespace-normal">
               <div className="space-y-1.5">
                 <ItemTitle title={bug.title} href={bug.message_url} />
-                {(bug.status_note || (canManage && bug.message_url)) ? (
+                {bug.status_note ? (
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                     {bug.status_note ? <span>Note: {bug.status_note}</span> : null}
-                    {canManage && bug.message_url ? <ManageLink href={bug.message_url} /> : null}
                   </div>
                 ) : null}
               </div>
@@ -609,6 +711,17 @@ function BugsTable({
                   active={Boolean(bug.viewer_is_following)}
                 />
               </div>
+            </TableCell>
+            <TableCell className="align-top">
+              <DashboardManageActions
+                kind="bug"
+                id={bug.id}
+                status={bug.status}
+                bugFilter={currentBugFilter}
+                suggestionFilter={currentSuggestionFilter}
+                canManage={canManage}
+                manageHref={bug.message_url}
+              />
             </TableCell>
           </TableRow>
         ))}
@@ -656,11 +769,12 @@ function SuggestionsTable({
               className="w-[8rem]"
               centered
             />
+            <ActionsTableHead />
           </TableRow>
         </TableHeader>
         <TableBody>
           <TableRow>
-            <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
+            <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
               No suggestions yet.
             </TableCell>
           </TableRow>
@@ -692,6 +806,7 @@ function SuggestionsTable({
             className="w-[8rem]"
             centered
           />
+          <ActionsTableHead />
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -705,17 +820,18 @@ function SuggestionsTable({
             data-sort-upvotes={String(feature.votes_count)}
             data-sort-follows={String(feature.follower_count ?? 0)}
           >
-            <TableCell className="align-top text-sm font-semibold text-foreground whitespace-nowrap">𖢥 #{feature.id}</TableCell>
+            <TableCell className="align-top text-sm font-semibold text-foreground whitespace-nowrap">
+              🐞 <ItemKey id={feature.id} href={feature.message_url} />
+            </TableCell>
             <TableCell className="align-top">
               <StatusBadge label={featureStatusLabel(feature.status)} className={featureStatusBadgeClass(feature.status)} />
             </TableCell>
             <TableCell className="align-top whitespace-normal">
               <div className="space-y-1.5">
                 <ItemTitle title={feature.title} href={feature.message_url} />
-                {(feature.status_note || (canManage && feature.message_url)) ? (
+                {feature.status_note ? (
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                     {feature.status_note ? <span>Note: {feature.status_note}</span> : null}
-                    {canManage && feature.message_url ? <ManageLink href={feature.message_url} /> : null}
                   </div>
                 ) : null}
               </div>
@@ -752,6 +868,17 @@ function SuggestionsTable({
                   active={Boolean(feature.viewer_is_following)}
                 />
               </div>
+            </TableCell>
+            <TableCell className="align-top">
+              <DashboardManageActions
+                kind="suggestion"
+                id={feature.id}
+                status={feature.status}
+                bugFilter={currentBugFilter}
+                suggestionFilter={currentSuggestionFilter}
+                canManage={canManage}
+                manageHref={feature.message_url}
+              />
             </TableCell>
           </TableRow>
         ))}

@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ComponentType, InteractionResponseType, MessageFlags } from 'discord-api-types/v10'
 import nacl from 'tweetnacl'
+import { createApp } from '../src/app'
 import { buildApplicationCommands } from '../src/discord/commands'
+import { createSignedSessionToken } from '../src/discord/auth'
 import {
   buildBugModalCustomId,
   buildDuplicateSelectionCustomId,
@@ -9,6 +11,7 @@ import {
   getCommandOptionInteger,
   getCommandOptionString,
   getFeatureSubmissionValues,
+  hasGuildConfigurationPermission,
   getModalFieldValues,
   getModalUploadedAttachmentUrl,
   hasAnyRole,
@@ -22,11 +25,17 @@ import {
 } from '../src/discord/interactions'
 import {
   bugModalResponse,
+  ephemeralRichMessage,
   featureModalResponse,
+  myItemsResponse,
   renderBugMessage,
-  renderFeatureMessage
+  renderFeatureMessage,
+  topBugsResponse
 } from '../src/discord/messages'
+import * as subscriptionsDb from '../src/db/subscriptions'
 import { DiscordApiError, DiscordRestClient } from '../src/discord/rest'
+import type { BugRecord, FeatureRecord } from '../src/types'
+import { notifyBugFollowers as notifyBugFollowerDms, notifyFeatureFollowers as notifyFeatureFollowerDms } from '../src/discord/notifications'
 import { normalizeBugTitle } from '../src/db/bugs'
 import { bugSubmissionSchema } from '../src/validation'
 import { renderDashboardPage } from '../src/ui/dashboard'
@@ -35,13 +44,24 @@ function toHex(bytes: Uint8Array): string {
   return Array.from(bytes).map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
+async function buildDashboardCookie(secret: string, userId = 'viewer-1'): Promise<string> {
+  const token = await createSignedSessionToken(secret, {
+    userId,
+    issuedAt: Date.now(),
+    expiresAt: Date.now() + 60_000
+  })
+
+  return `dashboard_session=${token}`
+}
+
 const env = {
   DB: {} as D1Database,
   DISCORD_PUBLIC_KEY: 'pk',
   DISCORD_APPLICATION_ID: 'app-id',
   DISCORD_TOKEN: 'token',
   BUG_REPORT_CHANNEL_ID: 'bug-channel',
-  FEATURE_CHANNEL_ID: 'feature-channel'
+  FEATURE_CHANNEL_ID: 'feature-channel',
+  DISCORD_GUILD_ID: 'guild'
 }
 
 afterEach(() => {
@@ -87,6 +107,13 @@ describe('authorization helpers', () => {
   it('detects manage messages permission', () => {
     expect(hasManageMessagesPermission(String(1n << 13n))).toBe(true)
     expect(hasManageMessagesPermission('0')).toBe(false)
+  })
+
+  it('detects guild configuration permissions', () => {
+    expect(hasGuildConfigurationPermission(String(1n << 5n))).toBe(true)
+    expect(hasGuildConfigurationPermission(String(1n << 4n))).toBe(true)
+    expect(hasGuildConfigurationPermission(String(1n << 3n))).toBe(true)
+    expect(hasGuildConfigurationPermission('0')).toBe(false)
   })
 })
 
@@ -144,6 +171,7 @@ describe('command helpers', () => {
       'bugs',
       'suggestion',
       'suggestions',
+      'feedback-config',
       'Report Message as Bug',
       'Turn Message into Suggestion'
     ])
@@ -151,6 +179,7 @@ describe('command helpers', () => {
     expect(commands.find((command) => command.name === 'bugs')?.options?.length).toBeGreaterThan(0)
     expect(commands.find((command) => command.name === 'suggestion')?.options).toBeUndefined()
     expect(commands.find((command) => command.name === 'suggestions')?.options?.length).toBeGreaterThan(0)
+    expect(commands.find((command) => command.name === 'feedback-config')?.options?.length).toBe(2)
   })
 })
 
@@ -263,13 +292,14 @@ describe('public message builders', () => {
       | { components?: Array<{ content?: string }> }
       | undefined
     expect(section?.components).toHaveLength(2)
-    expect(section?.components?.[0]?.content).toBe(`### \u{168A5} #1 - Fixed Bug`)
+    expect(section?.components?.[0]?.content).toBe(`### \u{1F41E} #1 - Fixed Bug`)
     expect(section?.components?.[1]?.content).toBe('<@123> desc')
     const buttons = container.components.find((component) => component.type === ComponentType.ActionRow)?.components ?? []
     expect(buttons[0]?.label).toBe('\u{1F53A} 2')
     expect(buttons[0]?.disabled).toBe(true)
     expect(buttons[1]?.label).toBe('Follow')
     expect(buttons[2]?.label).toBe('Manage')
+    expect(buttons).toHaveLength(3)
   })
 
   it('renders a component-driven feature card', () => {
@@ -306,13 +336,14 @@ describe('public message builders', () => {
       | { components?: Array<{ content?: string }> }
       | undefined
     expect(section?.components).toHaveLength(2)
-    expect(section?.components?.[0]?.content).toBe(`### \u2726 #3 - Open Suggestion`)
+    expect(section?.components?.[0]?.content).toBe(`### \u2728 #3 - Open Suggestion`)
     expect(section?.components?.[1]?.content).toBe('<@123> Add search to the dashboard')
     const buttons = container.components.find((component) => component.type === ComponentType.ActionRow)?.components ?? []
     expect(buttons[0]?.label).toBe('\u{1F53A} 5')
     expect(buttons[0]?.disabled).not.toBe(true)
     expect(buttons[1]?.label).toBe('Follow')
     expect(buttons[2]?.label).toBe('Manage')
+    expect(buttons).toHaveLength(3)
   })
 
   it('omits a header accessory when there is no screenshot or card link', () => {
@@ -358,10 +389,77 @@ describe('schemas and normalization', () => {
   it('normalizes punctuation and spacing in bug titles', () => {
     expect(normalizeBugTitle('  Crash! On login???  ')).toBe('crash on login')
   })
+
+  it('renders component-based ephemeral rich text responses', () => {
+    const response = ephemeralRichMessage('Review Bug #7.')
+
+    expect(response.type).toBe(InteractionResponseType.ChannelMessageWithSource)
+    expect(response.data.flags).toBe(MessageFlags.Ephemeral | MessageFlags.IsComponentsV2)
+    const firstComponent = response.data.components?.[0] as { type: number; content?: string }
+    expect(firstComponent.type).toBe(ComponentType.TextDisplay)
+    expect(firstComponent.content).toContain('Review Bug #7.')
+  })
+
+  it('renders linked list responses for top and owned items', () => {
+    const top = topBugsResponse([
+      {
+        id: 7,
+        title: 'Reconnect freeze',
+        description: 'desc',
+        status: 'OPEN',
+        reporter_id: 'user-1',
+        votes_count: 9,
+        duplicate_flags_count: 0,
+        linked_duplicates_count: 0,
+        regressions_count: 0,
+        channel_id: 'channel',
+        message_id: 'message',
+        message_url: 'https://discord.com/channels/guild/channel/message',
+        source_guild_id: null,
+        source_channel_id: null,
+        source_message_id: null,
+        related_bug_id: null,
+        relationship_type: null,
+        closed_reason: null,
+        status_note: null,
+        follower_count: 0,
+        created_at: '2026-03-18 15:00:00'
+      }
+    ])
+    const mine = myItemsResponse('suggestion', [
+      {
+        id: 11,
+        title: 'Saved filters',
+        description: 'desc',
+        status: 'PLANNED',
+        reporter_id: 'user-2',
+        votes_count: 5,
+        screenshot_url: null,
+        channel_id: 'feature-channel',
+        message_id: 'feature-message',
+        message_url: 'https://discord.com/channels/guild/feature-channel/feature-message',
+        source_guild_id: null,
+        source_channel_id: null,
+        source_message_id: null,
+        status_note: null,
+        follower_count: 0,
+        created_at: '2026-03-16 09:00:00'
+      }
+    ])
+
+    const topContent = (top as { data: { components?: Array<{ content?: string }> } }).data.components?.[0]?.content
+    const mineContent = (mine as { data: { components?: Array<{ content?: string }> } }).data.components?.[0]?.content
+    expect(topContent).toContain('#7')
+    expect(mineContent).toContain('#11')
+    const topButtons = (top as { data: { components?: Array<{ components?: Array<{ url?: string; label?: string }> }> } }).data.components?.[1]?.components
+    const mineButtons = (mine as { data: { components?: Array<{ components?: Array<{ url?: string; label?: string }> }> } }).data.components?.[1]?.components
+    expect(topButtons?.[0]?.url).toBe('https://discord.com/channels/guild/channel/message')
+    expect(mineButtons?.[0]?.url).toBe('https://discord.com/channels/guild/feature-channel/feature-message')
+  })
 })
 
 describe('dashboard renderer', () => {
-  it('renders the simplified admin tables with row actions', () => {
+  it('renders an Actions column with moderator controls', () => {
     const html = renderDashboardPage({
       currentBugFilter: 'all',
       currentSuggestionFilter: 'all',
@@ -394,10 +492,11 @@ describe('dashboard renderer', () => {
           id: 11,
           title: 'Saved dashboard filters',
           description: 'Remember the last dashboard view for returning moderators.',
-          status: 'PLANNED',
+          status: 'CLOSED',
           reporter_id: 'user-456',
           votes_count: 5,
           screenshot_url: null,
+          message_url: 'https://discord.com/channels/guild/feature-channel/feature-message',
           source_guild_id: null,
           source_channel_id: null,
           source_message_id: null,
@@ -409,11 +508,336 @@ describe('dashboard renderer', () => {
     })
 
     expect(html).toContain('Description')
+    expect(html).toContain('Actions')
+    expect(html).toContain('Manage')
     expect(html).toContain('Resolve')
+    expect(html).toContain('Reopen')
     expect(html).toContain('Delete')
-    expect(html).toContain('data-sort-header')
+    expect(html).toContain('data-sort-head')
     expect(html).toContain('https://discord.com/channels/guild/channel/message')
-    expect(html).toContain('Remember the last dashboard view for returning moderators.')
+    expect(html).toContain('https://discord.com/channels/guild/feature-channel/feature-message')
+    expect(html).toContain('>#7</a>')
+    expect(html).toContain('>#11</a>')
+  })
+
+  it('omits moderator action buttons for non-managers', () => {
+    const html = renderDashboardPage({
+      currentBugFilter: 'all',
+      currentSuggestionFilter: 'all',
+      canManage: false,
+      bugs: [
+        {
+          id: 7,
+          title: 'App freezes after reconnect',
+          description: 'The app freezes after reconnecting to the session.',
+          status: 'OPEN',
+          reporter_id: 'user-123',
+          votes_count: 9,
+          message_url: 'https://discord.com/channels/guild/channel/message',
+          duplicate_flags_count: 2,
+          linked_duplicates_count: 3,
+          regressions_count: 1,
+          source_guild_id: null,
+          source_channel_id: null,
+          source_message_id: null,
+          related_bug_id: null,
+          relationship_type: null,
+          closed_reason: null,
+          status_note: null,
+          follower_count: 0,
+          created_at: '2026-03-18 15:00:00'
+        }
+      ],
+      features: [
+        {
+          id: 11,
+          title: 'Saved dashboard filters',
+          description: 'Remember the last dashboard view for returning moderators.',
+          status: 'PLANNED',
+          reporter_id: 'user-456',
+          votes_count: 5,
+          screenshot_url: null,
+          message_url: 'https://discord.com/channels/guild/feature-channel/feature-message',
+          source_guild_id: null,
+          source_channel_id: null,
+          source_message_id: null,
+          status_note: null,
+          follower_count: 0,
+          created_at: '2026-03-16 09:00:00'
+        }
+      ]
+    })
+
+    expect(html).toContain('Actions')
+    expect(html).not.toContain('Manage')
+    expect(html).not.toContain('Resolve')
+    expect(html).not.toContain('Reopen')
+    expect(html).not.toContain('Delete')
+  })
+
+  it('uses the expanded column count for empty states', () => {
+    const html = renderDashboardPage({
+      currentBugFilter: 'all',
+      currentSuggestionFilter: 'all',
+      canManage: false,
+      bugs: [],
+      features: []
+    })
+
+    expect(html).toContain('colSpan="6"')
+    expect(html).toContain('No bugs yet.')
+    expect(html).toContain('No suggestions yet.')
+  })
+})
+
+describe('dashboard routes', () => {
+  it('redirects unauthenticated dashboard requests to Discord OAuth when configured', async () => {
+    const app = createApp()
+    const response = await app.fetch(
+      new Request('https://example.com/dashboard'),
+      {
+        DB: {} as D1Database,
+        DISCORD_PUBLIC_KEY: 'pk',
+        DISCORD_APPLICATION_ID: 'app-id',
+        DISCORD_TOKEN: 'token',
+        DISCORD_CLIENT_SECRET: 'client-secret',
+        COOKIE_SECRET: 'cookie-secret',
+        PUBLIC_APP_URL: 'https://example.com'
+      }
+    )
+
+    expect(response.status).toBe(302)
+    expect(response.headers.get('location')).toBe('/auth/discord/start')
+  })
+
+  it('returns 501 for the dashboard when auth is not configured', async () => {
+    const app = createApp()
+    const response = await app.fetch(
+      new Request('https://example.com/dashboard'),
+      {
+        DB: {} as D1Database,
+        DISCORD_PUBLIC_KEY: 'pk',
+        DISCORD_APPLICATION_ID: 'app-id',
+        DISCORD_TOKEN: 'token'
+      }
+    )
+
+    expect(response.status).toBe(501)
+    await expect(response.text()).resolves.toContain('Dashboard authentication is not configured.')
+  })
+
+  it('returns 401 for dashboard JSON endpoints without a valid session', async () => {
+    const app = createApp()
+    const bindings = {
+      DB: {} as D1Database,
+      DISCORD_PUBLIC_KEY: 'pk',
+      DISCORD_APPLICATION_ID: 'app-id',
+      DISCORD_TOKEN: 'token',
+      DISCORD_CLIENT_SECRET: 'client-secret',
+      COOKIE_SECRET: 'cookie-secret',
+      PUBLIC_APP_URL: 'https://example.com'
+    }
+
+    for (const path of ['/api/bugs', '/api/features', '/api/suggestions']) {
+      const response = await app.fetch(new Request(`https://example.com${path}`), bindings)
+      expect(response.status).toBe(401)
+      await expect(response.json()).resolves.toEqual({ error: 'Unauthorized' })
+    }
+  })
+
+  it('blocks non-moderator dashboard management actions', async () => {
+    const app = createApp()
+    const cookie = await buildDashboardCookie('cookie-secret')
+    const body = new URLSearchParams({
+      kind: 'bug',
+      id: '7',
+      action: 'resolve',
+      bugStatus: 'all',
+      suggestionStatus: 'all'
+    })
+
+    const response = await app.fetch(
+      new Request('https://example.com/dashboard/actions', {
+        method: 'POST',
+        headers: {
+          Cookie: cookie,
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body
+      }),
+      {
+        DB: {} as D1Database,
+        DISCORD_PUBLIC_KEY: 'pk',
+        DISCORD_APPLICATION_ID: 'app-id',
+        DISCORD_TOKEN: 'token',
+        DISCORD_CLIENT_SECRET: 'client-secret',
+        COOKIE_SECRET: 'cookie-secret',
+        PUBLIC_APP_URL: 'https://example.com'
+      }
+    )
+
+    expect(response.status).toBe(401)
+    await expect(response.text()).resolves.toBe('Unauthorized')
+  })
+})
+
+describe('notification delivery', () => {
+  it('does not notify the bug reporter unless they explicitly follow', async () => {
+    vi.spyOn(subscriptionsDb, 'listSubscriptionsForItem').mockResolvedValue([])
+    const createDmChannel = vi.fn().mockResolvedValue({ id: 'dm-reporter-bug' })
+    const createMessage = vi.fn().mockResolvedValue({ id: 'message-reporter-bug', channel_id: 'dm-reporter-bug' })
+    const client = { createDmChannel, createMessage } as unknown as DiscordRestClient
+
+    const bug: BugRecord = {
+      id: 9,
+      title: 'Crash on refresh',
+      title_normalized: 'crash on refresh',
+      description: 'desc',
+      steps: '',
+      expected: '',
+      actual: '',
+      platform: 'WEB',
+      severity: 'MEDIUM',
+      screenshot_url: null,
+      status: 'ACKNOWLEDGED',
+      reporter_id: 'reporter-only',
+      votes_count: 0,
+      duplicate_flags_count: 0,
+      linked_duplicates_count: 0,
+      regressions_count: 0,
+      channel_id: 'bug-channel',
+      message_id: 'bug-message',
+      source_guild_id: null,
+      source_channel_id: null,
+      source_message_id: null,
+      related_bug_id: null,
+      relationship_type: null,
+      closed_reason: null,
+      status_note: null,
+      created_at: '2026-03-20T00:00:00Z',
+      updated_at: '2026-03-20T00:00:00Z'
+    }
+
+    await notifyBugFollowerDms(env, client, bug)
+
+    expect(createDmChannel).not.toHaveBeenCalled()
+    expect(createMessage).not.toHaveBeenCalled()
+  })
+
+  it('sends linked bug follower DMs', async () => {
+    vi.spyOn(subscriptionsDb, 'listSubscriptionsForItem').mockResolvedValue([
+      { item_kind: 'bug', item_id: 1, user_id: 'follower-1', created_at: '2026-03-20T00:00:00Z' }
+    ])
+    const createDmChannel = vi.fn().mockResolvedValue({ id: 'dm-1' })
+    const createMessage = vi.fn().mockResolvedValue({ id: 'message-1', channel_id: 'dm-1' })
+    const client = { createDmChannel, createMessage } as unknown as DiscordRestClient
+
+    const bug: BugRecord = {
+      id: 1,
+      title: 'Reconnect freeze',
+      title_normalized: 'reconnect freeze',
+      description: 'desc',
+      steps: '',
+      expected: '',
+      actual: '',
+      platform: 'WEB',
+      severity: 'HIGH',
+      screenshot_url: null,
+      status: 'IN_PROGRESS',
+      reporter_id: 'reporter-1',
+      votes_count: 0,
+      duplicate_flags_count: 0,
+      linked_duplicates_count: 0,
+      regressions_count: 0,
+      channel_id: 'bug-channel',
+      message_id: 'bug-message',
+      source_guild_id: null,
+      source_channel_id: null,
+      source_message_id: null,
+      related_bug_id: null,
+      relationship_type: null,
+      closed_reason: null,
+      status_note: 'Investigating now',
+      created_at: '2026-03-20T00:00:00Z',
+      updated_at: '2026-03-20T00:00:00Z'
+    }
+
+    await notifyBugFollowerDms(env, client, bug)
+
+    expect(createMessage).toHaveBeenCalledTimes(1)
+    const payload = createMessage.mock.calls[0]?.[1] as { flags?: number; components?: Array<{ content?: string; components?: Array<{ url?: string; label?: string }> }> }
+    expect(payload.flags).toBe(MessageFlags.IsComponentsV2)
+    expect(payload.components?.[0]?.content).toContain('\u{1F41E} #1 is now In Progress')
+    expect(payload.components?.[0]?.content).toContain('Note: Investigating now')
+    expect(payload.components?.[1]?.components?.[0]?.url).toBe('https://discord.com/channels/guild/bug-channel/bug-message')
+    expect(payload.components?.[1]?.components?.[0]?.label).toBe('Bug #1')
+  })
+
+  it('sends linked suggestion follower DMs', async () => {
+    vi.spyOn(subscriptionsDb, 'listSubscriptionsForItem').mockResolvedValue([
+      { item_kind: 'feature', item_id: 3, user_id: 'follower-2', created_at: '2026-03-20T00:00:00Z' }
+    ])
+    const createDmChannel = vi.fn().mockResolvedValue({ id: 'dm-2' })
+    const createMessage = vi.fn().mockResolvedValue({ id: 'message-2', channel_id: 'dm-2' })
+    const client = { createDmChannel, createMessage } as unknown as DiscordRestClient
+
+    const feature: FeatureRecord = {
+      id: 3,
+      title: 'Saved filters',
+      description: 'desc',
+      benefit: '',
+      screenshot_url: null,
+      status: 'PLANNED',
+      reporter_id: 'reporter-2',
+      votes_count: 0,
+      channel_id: 'feature-channel',
+      message_id: 'feature-message',
+      source_guild_id: null,
+      source_channel_id: null,
+      source_message_id: null,
+      status_note: null,
+      created_at: '2026-03-20T00:00:00Z',
+      updated_at: '2026-03-20T00:00:00Z'
+    }
+
+    await notifyFeatureFollowerDms(env, client, feature)
+
+    expect(createMessage).toHaveBeenCalledTimes(1)
+    const payload = createMessage.mock.calls[0]?.[1] as { components?: Array<{ content?: string; components?: Array<{ url?: string; label?: string }> }> }
+    expect(payload.components?.[0]?.content).toContain('\u2728 #3 is now Planned')
+    expect(payload.components?.[1]?.components?.[0]?.url).toBe('https://discord.com/channels/guild/feature-channel/feature-message')
+    expect(payload.components?.[1]?.components?.[0]?.label).toBe('Suggestion #3')
+  })
+
+  it('does not notify the suggestion reporter unless they explicitly follow', async () => {
+    vi.spyOn(subscriptionsDb, 'listSubscriptionsForItem').mockResolvedValue([])
+    const createDmChannel = vi.fn().mockResolvedValue({ id: 'dm-reporter-feature' })
+    const createMessage = vi.fn().mockResolvedValue({ id: 'message-reporter-feature', channel_id: 'dm-reporter-feature' })
+    const client = { createDmChannel, createMessage } as unknown as DiscordRestClient
+
+    const feature: FeatureRecord = {
+      id: 12,
+      title: 'Compact mode',
+      description: 'desc',
+      benefit: '',
+      screenshot_url: null,
+      status: 'UNDER_REVIEW',
+      reporter_id: 'feature-reporter-only',
+      votes_count: 0,
+      channel_id: 'feature-channel',
+      message_id: 'feature-message',
+      source_guild_id: null,
+      source_channel_id: null,
+      source_message_id: null,
+      status_note: null,
+      created_at: '2026-03-20T00:00:00Z',
+      updated_at: '2026-03-20T00:00:00Z'
+    }
+
+    await notifyFeatureFollowerDms(env, client, feature)
+
+    expect(createDmChannel).not.toHaveBeenCalled()
+    expect(createMessage).not.toHaveBeenCalled()
   })
 })
 

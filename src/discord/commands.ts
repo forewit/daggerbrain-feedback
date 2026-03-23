@@ -2,6 +2,7 @@ import {
   ApplicationCommandOptionType,
   ApplicationCommandType,
   ApplicationIntegrationType,
+  ChannelType,
   InteractionContextType,
   type APIApplicationCommandOption,
   type APIApplicationCommandBasicOption,
@@ -119,6 +120,47 @@ function suggestionsSubcommands(): APIApplicationCommandOption[] {
   ]
 }
 
+function feedbackConfigSubcommands(): APIApplicationCommandOption[] {
+  return [
+    {
+      type: ApplicationCommandOptionType.Subcommand,
+      name: 'show',
+      description: 'Show the configured bug and suggestion channels'
+    },
+    {
+      type: ApplicationCommandOptionType.Subcommand,
+      name: 'set',
+      description: 'Set the bug and suggestion channels for this server',
+      options: [
+        {
+          type: ApplicationCommandOptionType.Channel,
+          name: 'bug_channel',
+          description: 'Channel or forum for bug reports',
+          required: false,
+          channel_types: [
+            ChannelType.GuildText,
+            ChannelType.GuildAnnouncement,
+            ChannelType.GuildForum,
+            ChannelType.GuildMedia
+          ]
+        },
+        {
+          type: ApplicationCommandOptionType.Channel,
+          name: 'suggestion_channel',
+          description: 'Channel or forum for suggestions',
+          required: false,
+          channel_types: [
+            ChannelType.GuildText,
+            ChannelType.GuildAnnouncement,
+            ChannelType.GuildForum,
+            ChannelType.GuildMedia
+          ]
+        }
+      ]
+    }
+  ]
+}
+
 export function buildApplicationCommands(manageMessagesPermission: string): RESTPutAPIApplicationCommandsJSONBody {
   return [
     {
@@ -150,6 +192,16 @@ export function buildApplicationCommands(manageMessagesPermission: string): REST
       integration_types: [ApplicationIntegrationType.GuildInstall, ApplicationIntegrationType.UserInstall],
       contexts: [InteractionContextType.Guild, InteractionContextType.BotDM],
       options: suggestionsSubcommands()
+    },
+    {
+      type: ApplicationCommandType.ChatInput,
+      name: 'feedback-config',
+      description: 'Configure bug and suggestion channels for this server',
+      default_member_permissions: String((1n << 4n) | (1n << 5n)),
+      dm_permission: false,
+      integration_types: [ApplicationIntegrationType.GuildInstall],
+      contexts: [InteractionContextType.Guild],
+      options: feedbackConfigSubcommands()
     },
     {
       type: ApplicationCommandType.Message,

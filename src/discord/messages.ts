@@ -34,6 +34,9 @@ import {
 type MessageButton = APIButtonComponentWithCustomId | APIButtonComponentWithURL
 type ButtonRow = APIActionRowComponent<MessageButton>
 type DiscordMessagePayload = RESTPostAPIChannelMessageJSONBody
+type LinkedBugPreflightMatch = BugPreflightMatch & { message_url?: string | null }
+type LinkedBugSummary = BugSummary & { message_url?: string | null }
+type LinkedFeatureSummary = FeatureSummary & { message_url?: string | null }
 
 const EMOJI = {
   bug: '\u{1F41E}',
@@ -53,8 +56,8 @@ const EMOJI = {
   upvoteCompact: '\u{1F53A}'
 } as const
 
-const BUG_KEY_MARKER = '\u{168A5}'
-const FEATURE_KEY_MARKER = '\u2726'
+const BUG_KEY_MARKER = '\u{1F41E}'
+const FEATURE_KEY_MARKER = '\u2728'
 
 const bugStatusMeta = {
   OPEN: { label: 'Open', emoji: EMOJI.open, color: 0xe74c3c },
@@ -182,6 +185,69 @@ function textDisplay(content: string): APITextDisplayComponent {
   return { type: ComponentType.TextDisplay, content }
 }
 
+export function linkedText(label: string, url?: string | null): string {
+  return label
+}
+
+export function linkedItemKeyText(
+  kind: 'bug' | 'feature',
+  id: number,
+  url?: string | null,
+  options?: { includeKind?: boolean; capitalizeKind?: boolean }
+): string {
+  if (options?.includeKind === false) {
+    return linkedText(`#${id}`, url)
+  }
+
+  const noun = kind === 'bug' ? 'bug' : 'suggestion'
+  const label = options?.capitalizeKind === false ? noun : noun.charAt(0).toUpperCase() + noun.slice(1)
+  return linkedText(`${label} #${id}`, url)
+}
+
+export function itemKeyText(kind: 'bug' | 'feature', id: number, url?: string | null): string {
+  return `${kind === 'bug' ? BUG_KEY_MARKER : FEATURE_KEY_MARKER} ${linkedItemKeyText(kind, id, url, { includeKind: false })}`
+}
+
+export function bugStatusLabel(status: BugRecord['status']): string {
+  return bugStatusMeta[status].label
+}
+
+export function featureStatusLabel(status: FeatureRecord['status']): string {
+  return suggestionStatusMeta[status].label
+}
+
+type ItemLinkTarget = {
+  kind: 'bug' | 'feature'
+  id: number
+  url?: string | null
+  label?: string
+}
+
+export function itemLinkButtonRows(targets: ItemLinkTarget[]): ButtonRow[] {
+  const buttons = targets
+    .filter((target) => target.url)
+    .map((target) =>
+      linkButton(
+        target.label ?? linkedItemKeyText(target.kind, target.id, null),
+        target.url as string
+      )
+    )
+
+  return buttonRows(buttons)
+}
+
+function richTextPayload(content: string, options?: { components?: ButtonRow[]; ephemeral?: boolean }): DiscordMessagePayload {
+  const flags =
+    MessageFlags.IsComponentsV2 |
+    (options?.ephemeral ? MessageFlags.Ephemeral : 0)
+
+  return {
+    allowed_mentions: { parse: [] },
+    flags,
+    components: [textDisplay(content), ...(options?.components ?? [])]
+  }
+}
+
 function bugStatusActionCustomId(bugId: number, status: string): string {
   return `${CUSTOM_IDS.bugStatusActionPrefix}${bugId}:${status}`
 }
@@ -214,6 +280,17 @@ export function ephemeralMessage(content: string, components: ButtonRow[] = []):
       ...(components.length > 0 ? { components } : {})
     }
   }
+}
+
+export function ephemeralRichMessage(content: string, components: ButtonRow[] = []): APIInteractionResponseChannelMessageWithSource {
+  return {
+    type: InteractionResponseType.ChannelMessageWithSource,
+    data: richTextPayload(content, { components, ephemeral: true })
+  }
+}
+
+export function richTextMessage(content: string, components: ButtonRow[] = []): DiscordMessagePayload {
+  return richTextPayload(content, { components })
 }
 
 export function silentComponentAck(): APIInteractionResponseDeferredMessageUpdate {
@@ -277,19 +354,23 @@ export function featureModalResponse(
 export function bugPreflightResponse(
   sessionId: string,
   title: string,
-  duplicates: BugPreflightMatch[],
-  regressions: BugPreflightMatch[]
+  duplicates: LinkedBugPreflightMatch[],
+  regressions: LinkedBugPreflightMatch[]
 ): APIInteractionResponseChannelMessageWithSource {
   const lines = [`${EMOJI.feedback} Close matches for "${title}"`]
 
   if (duplicates.length > 0) {
     lines.push('', 'Open bugs:')
-    duplicates.forEach((bug) => lines.push(`- ${EMOJI.bug} #${bug.id} ${bug.title}`))
+    duplicates.forEach((bug) =>
+      lines.push(`- ${EMOJI.bug} ${linkedItemKeyText('bug', bug.id, bug.message_url, { includeKind: false })} ${bug.title}`)
+    )
   }
 
   if (regressions.length > 0) {
     lines.push('', 'Recently closed bugs:')
-    regressions.forEach((bug) => lines.push(`- ${EMOJI.bug} #${bug.id} ${bug.title}`))
+    regressions.forEach((bug) =>
+      lines.push(`- ${EMOJI.bug} ${linkedItemKeyText('bug', bug.id, bug.message_url, { includeKind: false })} ${bug.title}`)
+    )
   }
 
   const buttons: MessageButton[] = [
@@ -302,50 +383,76 @@ export function bugPreflightResponse(
     button(buildPreflightCustomId(sessionId, null, null), 'Create New', ButtonStyle.Primary)
   ]
 
-  return ephemeralMessage(lines.join('\n'), buttonRows(buttons))
+  return ephemeralRichMessage(
+    lines.join('\n'),
+    [...itemLinkButtonRows([...duplicates, ...regressions].map((bug) => ({ kind: 'bug' as const, id: bug.id, url: bug.message_url }))), ...buttonRows(buttons)]
+  )
 }
 
-export function duplicateSelectionResponse(sourceBug: Pick<BugRecord, 'id' | 'title'>, duplicates: BugPreflightMatch[]) {
+export function duplicateSelectionResponse(
+  sourceBug: Pick<BugRecord, 'id' | 'title'> & { message_url?: string | null },
+  duplicates: LinkedBugPreflightMatch[]
+) {
   const lines = [`${EMOJI.duplicate} Pick the original report for "${sourceBug.title}"`]
-  duplicates.forEach((bug) => lines.push(`- ${EMOJI.bug} #${bug.id} ${bug.title}`))
+  duplicates.forEach((bug) =>
+    lines.push(`- ${EMOJI.bug} ${linkedItemKeyText('bug', bug.id, bug.message_url, { includeKind: false })} ${bug.title}`)
+  )
 
-  return ephemeralMessage(
-    lines.join('\n'),
-    buttonRows(
+  return ephemeralRichMessage(lines.join('\n'), [
+    ...itemLinkButtonRows(duplicates.map((bug) => ({ kind: 'bug' as const, id: bug.id, url: bug.message_url, label: `Open #${bug.id}` }))),
+    ...buttonRows(
       duplicates.map((bug) =>
         button(buildDuplicateSelectionCustomId(sourceBug.id, bug.id), `Bug #${bug.id}`, ButtonStyle.Secondary)
       )
     )
-  )
+  ])
 }
 
-export function topBugsResponse(bugs: BugSummary[]): APIInteractionResponse {
+export function topBugsResponse(bugs: LinkedBugSummary[]): APIInteractionResponse {
   if (bugs.length === 0) {
     return ephemeralMessage('No open bugs yet.')
   }
 
   const content = bugs
     .slice(0, 5)
-    .map((bug, index) => `${index + 1}. ${EMOJI.bug} #${bug.id} - ${bug.votes_count} upvotes - ${bug.title}`)
+    .map(
+      (bug, index) =>
+        `${index + 1}. ${EMOJI.bug} ${linkedItemKeyText('bug', bug.id, bug.message_url, { includeKind: false })} - ${bug.votes_count} upvotes - ${bug.title}`
+    )
     .join('\n')
 
-  return ephemeralMessage(content)
+  return ephemeralRichMessage(
+    content,
+    itemLinkButtonRows(bugs.map((bug) => ({ kind: 'bug' as const, id: bug.id, url: bug.message_url })))
+  )
 }
 
-export function myItemsResponse(kind: 'bug' | 'suggestion', items: Array<BugSummary | FeatureSummary>): APIInteractionResponse {
+export function myItemsResponse(
+  kind: 'bug' | 'suggestion',
+  items: Array<(LinkedBugSummary | LinkedFeatureSummary)>
+): APIInteractionResponse {
   if (items.length === 0) {
     return ephemeralMessage(`You have not created any ${kind === 'bug' ? 'bugs' : 'suggestions'} yet.`)
   }
 
   const content = items
     .slice(0, 5)
-    .map((item) => `- #${item.id} ${item.title} (${item.status})`)
+    .map((item) => `- ${linkedItemKeyText(kind === 'bug' ? 'bug' : 'feature', item.id, item.message_url, { includeKind: false })} ${item.title} (${item.status})`)
     .join('\n')
 
-  return ephemeralMessage(content)
+  return ephemeralRichMessage(
+    content,
+    itemLinkButtonRows(
+      items.map((item) => ({
+        kind: kind === 'bug' ? ('bug' as const) : ('feature' as const),
+        id: item.id,
+        url: item.message_url
+      }))
+    )
+  )
 }
 
-export function bugManageResponse(bug: BugRecord): APIInteractionResponse {
+export function bugManageResponse(bug: BugRecord, bugUrl?: string | null): APIInteractionResponse {
   const buttons: MessageButton[] = [
     button(bugStatusActionCustomId(bug.id, 'OPEN'), 'Open', ButtonStyle.Secondary, bug.status === 'OPEN'),
     button(
@@ -361,13 +468,14 @@ export function bugManageResponse(bug: BugRecord): APIInteractionResponse {
       bug.status === 'IN_PROGRESS'
     ),
     button(bugStatusActionCustomId(bug.id, 'FIXED'), 'Fixed', ButtonStyle.Success, bug.status === 'FIXED'),
-    button(bugStatusActionCustomId(bug.id, 'CLOSED'), 'Closed', ButtonStyle.Secondary, bug.status === 'CLOSED')
+    button(bugStatusActionCustomId(bug.id, 'CLOSED'), 'Closed', ButtonStyle.Secondary, bug.status === 'CLOSED'),
+    ...(bugUrl ? [linkButton(`Bug #${bug.id}`, bugUrl)] : [])
   ]
 
-  return ephemeralMessage(`Manage bug #${bug.id}`, buttonRows(buttons))
+  return ephemeralRichMessage(`Manage ${linkedItemKeyText('bug', bug.id, bugUrl, { capitalizeKind: false })}`, buttonRows(buttons))
 }
 
-export function featureManageResponse(feature: FeatureRecord): APIInteractionResponse {
+export function featureManageResponse(feature: FeatureRecord, featureUrl?: string | null): APIInteractionResponse {
   const buttons: MessageButton[] = [
     button(featureStatusActionCustomId(feature.id, 'OPEN'), 'Open', ButtonStyle.Secondary, feature.status === 'OPEN'),
     button(
@@ -405,14 +513,18 @@ export function featureManageResponse(feature: FeatureRecord): APIInteractionRes
       'Closed',
       ButtonStyle.Secondary,
       feature.status === 'CLOSED'
-    )
+    ),
+    ...(featureUrl ? [linkButton(`Suggestion #${feature.id}`, featureUrl)] : [])
   ]
 
-  return ephemeralMessage(`Manage suggestion #${feature.id}`, buttonRows(buttons))
+  return ephemeralRichMessage(
+    `Manage ${linkedItemKeyText('feature', feature.id, featureUrl, { capitalizeKind: false })}`,
+    buttonRows(buttons)
+  )
 }
 
-function buildItemKey(kind: 'bug' | 'feature', id: number): string {
-  return `${kind === 'bug' ? BUG_KEY_MARKER : FEATURE_KEY_MARKER} #${id}`
+function buildItemKey(kind: 'bug' | 'feature', id: number, url?: string | null): string {
+  return itemKeyText(kind, id, url)
 }
 
 function buildReporterSummary(reporterId: string, description: string): string {
@@ -420,17 +532,7 @@ function buildReporterSummary(reporterId: string, description: string): string {
   return truncate(`<@${reporterId}> ${summary}`, 500)
 }
 
-function buildBugHeaderText(bug: BugRecord): string {
-  const status = bugStatusMeta[bug.status]
-  return `${buildItemKey('bug', bug.id)} - ${status.label} Bug`
-}
-
-function buildFeatureHeaderText(feature: FeatureRecord): string {
-  const status = suggestionStatusMeta[feature.status]
-  return `${buildItemKey('feature', feature.id)} - ${status.label} Suggestion`
-}
-
-function buildBugActionRow(bug: BugRecord): ButtonRow {
+function buildBugActionRow(bug: BugRecord, bugUrl?: string | null): ButtonRow {
   const isClosed = bug.status === 'FIXED' || bug.status === 'CLOSED' || bug.status === 'DUPLICATE'
   const buttons: MessageButton[] = [
     button(`${CUSTOM_IDS.upvotePrefix}${bug.id}`, `${EMOJI.upvoteCompact} ${bug.votes_count}`, ButtonStyle.Primary, isClosed),
@@ -441,7 +543,7 @@ function buildBugActionRow(bug: BugRecord): ButtonRow {
   return itemCardActionRow(buttons)
 }
 
-function buildFeatureActionRow(feature: FeatureRecord): ButtonRow {
+function buildFeatureActionRow(feature: FeatureRecord, featureUrl?: string | null): ButtonRow {
   const buttons: MessageButton[] = [
     button(
       `${CUSTOM_IDS.featureUpvotePrefix}${feature.id}`,
@@ -466,14 +568,12 @@ function bugCardComponents(
   }
 ): APIContainerComponent[] {
   const status = bugStatusMeta[bug.status]
-  const title = buildBugHeaderText(bug)
+  const title = `${buildItemKey('bug', bug.id, options?.bugUrl)} - ${status.label} Bug`
   const summary = buildReporterSummary(bug.reporter_id, bug.description)
 
   const sectionAccessory: APISectionAccessoryComponent | null = bug.screenshot_url
     ? ({ type: ComponentType.Thumbnail, media: { url: bug.screenshot_url }, description: 'Bug screenshot' } satisfies APIThumbnailComponent)
-    : (options?.bugUrl
-        ? linkButton('Open Card', options.bugUrl)
-        : null)
+    : null
 
   const components = sectionAccessory
     ? [
@@ -482,12 +582,12 @@ function bugCardComponents(
           components: [textDisplay(`### ${title}`), textDisplay(truncate(summary, 500))],
           accessory: sectionAccessory
         } satisfies APISectionComponent,
-        buildBugActionRow(bug)
+        buildBugActionRow(bug, options?.bugUrl)
       ]
     : [
         textDisplay(`### ${title}`),
         textDisplay(summary),
-        buildBugActionRow(bug)
+        buildBugActionRow(bug, options?.bugUrl)
       ]
 
   return [
@@ -504,14 +604,12 @@ function featureCardComponents(
   options?: { featureUrl?: string | null; sourceMessageUrl?: string | null }
 ): APIContainerComponent[] {
   const status = suggestionStatusMeta[feature.status]
-  const title = buildFeatureHeaderText(feature)
+  const title = `${buildItemKey('feature', feature.id, options?.featureUrl)} - ${status.label} Suggestion`
   const summary = buildReporterSummary(feature.reporter_id, feature.description)
 
   const sectionAccessory: APISectionAccessoryComponent | null = feature.screenshot_url
     ? ({ type: ComponentType.Thumbnail, media: { url: feature.screenshot_url }, description: 'Suggestion screenshot' } satisfies APIThumbnailComponent)
-    : (options?.featureUrl
-        ? linkButton('Open Card', options.featureUrl)
-        : null)
+    : null
 
   const components = sectionAccessory
     ? [
@@ -520,12 +618,12 @@ function featureCardComponents(
           components: [textDisplay(`### ${title}`), textDisplay(truncate(summary, 500))],
           accessory: sectionAccessory
         } satisfies APISectionComponent,
-        buildFeatureActionRow(feature)
+        buildFeatureActionRow(feature, options?.featureUrl)
       ]
     : [
         textDisplay(`### ${title}`),
         textDisplay(summary),
-        buildFeatureActionRow(feature)
+        buildFeatureActionRow(feature, options?.featureUrl)
       ]
 
   return [

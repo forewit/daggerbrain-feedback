@@ -1,6 +1,7 @@
 import { ChannelType } from 'discord-api-types/v10'
 import { getBugById } from '../db/bugs'
 import { getFeatureById } from '../db/features'
+import { getGuildFeedbackSettings } from '../db/guild-settings'
 import { countSubscriptions } from '../db/subscriptions'
 import type { BugRecord, Env, FeatureRecord } from '../types'
 import {
@@ -9,12 +10,24 @@ import {
 } from './messages'
 import { DiscordApiError, DiscordRestClient, type DiscordChannelRecord } from './rest'
 
-export function buildDiscordMessageUrl(env: Env, channelId: string | null, messageId: string | null): string | null {
-  if (!env.DISCORD_GUILD_ID || !channelId || !messageId) {
+export class MissingFeedbackChannelError extends Error {
+  constructor(readonly kind: 'bug' | 'feature', readonly guildId: string | null) {
+    super(`No ${kind} report channel configured.`)
+  }
+}
+
+export function buildDiscordMessageUrl(
+  env: Pick<Env, 'DISCORD_GUILD_ID'>,
+  channelId: string | null,
+  messageId: string | null,
+  guildId?: string | null
+): string | null {
+  const resolvedGuildId = guildId ?? env.DISCORD_GUILD_ID ?? null
+  if (!resolvedGuildId || !channelId || !messageId) {
     return null
   }
 
-  return `https://discord.com/channels/${env.DISCORD_GUILD_ID}/${channelId}/${messageId}`
+  return `https://discord.com/channels/${resolvedGuildId}/${channelId}/${messageId}`
 }
 
 export function buildSourceMessageUrl(
@@ -42,6 +55,106 @@ export function buildBugLink(env: Env, bug: { id: number; channel_id: string | n
 
 export function buildFeatureLink(env: Env, feature: { channel_id: string | null; message_id: string | null }): string | null {
   return buildDiscordMessageUrl(env, feature.channel_id, feature.message_id)
+}
+
+function getDefaultReportChannelId(env: Env, kind: 'bug' | 'feature'): string | null {
+  return kind === 'bug' ? env.BUG_REPORT_CHANNEL_ID ?? null : env.FEATURE_CHANNEL_ID ?? null
+}
+
+async function resolveConfiguredReportChannelId(
+  env: Env,
+  kind: 'bug' | 'feature',
+  guildId?: string | null
+): Promise<string | null> {
+  if (guildId) {
+    const settings = await getGuildFeedbackSettings(env.DB, guildId)
+    const configured = kind === 'bug' ? settings?.bug_report_channel_id : settings?.feature_channel_id
+    if (configured) {
+      return configured
+    }
+  }
+
+  return getDefaultReportChannelId(env, kind)
+}
+
+async function requireConfiguredReportChannelId(
+  env: Env,
+  kind: 'bug' | 'feature',
+  guildId?: string | null
+): Promise<string> {
+  const channelId = await resolveConfiguredReportChannelId(env, kind, guildId)
+  if (channelId) {
+    return channelId
+  }
+
+  throw new MissingFeedbackChannelError(kind, guildId ?? null)
+}
+
+async function resolveReportGuildId(
+  env: Env,
+  client: DiscordRestClient,
+  kind: 'bug' | 'feature',
+  fallbackGuildId?: string | null,
+  configuredChannelId?: string | null,
+  postedChannelId?: string | null
+): Promise<string | null> {
+  if (env.DISCORD_GUILD_ID) {
+    return env.DISCORD_GUILD_ID
+  }
+
+  if (fallbackGuildId) {
+    return fallbackGuildId
+  }
+
+  try {
+    const channelId = postedChannelId ?? configuredChannelId ?? getDefaultReportChannelId(env, kind)
+    if (!channelId) {
+      return null
+    }
+
+    const channel = await client.getChannel(channelId)
+    return channel.guild_id ?? null
+  } catch (error) {
+    logDiscordApiError('discord.resolve_report_guild_failed', error, { kind })
+    return null
+  }
+}
+
+async function getParentReportChannel(
+  client: DiscordRestClient,
+  messageChannelId: string
+): Promise<DiscordChannelRecord | null> {
+  try {
+    const channel = await client.getChannel(messageChannelId)
+    if (!channel.parent_id) {
+      return channel
+    }
+
+    return await client.getChannel(channel.parent_id)
+  } catch (error) {
+    logDiscordApiError('discord.resolve_parent_report_channel_failed', error, { messageChannelId })
+    return null
+  }
+}
+
+export async function resolveBugReportCardUrl(
+  env: Env,
+  client: DiscordRestClient,
+  bug: { id: number; channel_id?: string | null; message_id?: string | null; source_guild_id?: string | null }
+): Promise<string | null> {
+  const configuredChannelId = await resolveConfiguredReportChannelId(env, 'bug', bug.source_guild_id ?? null)
+  const guildId = await resolveReportGuildId(env, client, 'bug', bug.source_guild_id ?? null, configuredChannelId, bug.channel_id ?? null)
+  return buildDiscordMessageUrl(env, bug.channel_id ?? null, bug.message_id ?? null, guildId) ?? buildDashboardBugUrl(env, bug.id)
+}
+
+export async function resolveFeatureReportCardUrl(
+  env: Env,
+  client: DiscordRestClient,
+  feature: { channel_id?: string | null; message_id?: string | null; source_guild_id?: string | null }
+): Promise<string | null> {
+  const configuredChannelId = await resolveConfiguredReportChannelId(env, 'feature', feature.source_guild_id ?? null)
+  const guildId = await resolveReportGuildId(env, client, 'feature', feature.source_guild_id ?? null, configuredChannelId, feature.channel_id ?? null)
+  return buildDiscordMessageUrl(env, feature.channel_id ?? null, feature.message_id ?? null, guildId)
 }
 
 function normalizeTagName(value: string): string {
@@ -98,9 +211,10 @@ function buildForumStarterMessage(kind: 'bug' | 'feature', title: string, report
 }
 
 export async function createBugReportMessage(env: Env, client: DiscordRestClient, bug: BugRecord) {
-  const channel = await client.getChannel(env.BUG_REPORT_CHANNEL_ID)
+  const reportChannelId = await requireConfiguredReportChannelId(env, 'bug', bug.source_guild_id)
+  const channel = await client.getChannel(reportChannelId)
   const relatedBug = bug.related_bug_id ? await getBugById(env.DB, bug.related_bug_id) : null
-  const relatedBugUrl = relatedBug ? buildBugLink(env, relatedBug) : null
+  const relatedBugUrl = relatedBug ? await resolveBugReportCardUrl(env, client, relatedBug) : null
   const bugUrl = buildBugLink(env, bug)
   const sourceMessageUrl = buildSourceMessageUrl(env, bug.source_guild_id, bug.source_channel_id, bug.source_message_id)
   const followerCount = await countSubscriptions(env.DB, 'bug', bug.id)
@@ -128,7 +242,8 @@ export async function createBugReportMessage(env: Env, client: DiscordRestClient
 }
 
 export async function createFeatureReportMessage(env: Env, client: DiscordRestClient, feature: FeatureRecord) {
-  const channel = await client.getChannel(env.FEATURE_CHANNEL_ID)
+  const reportChannelId = await requireConfiguredReportChannelId(env, 'feature', feature.source_guild_id)
+  const channel = await client.getChannel(reportChannelId)
   const featureUrl = buildFeatureLink(env, feature)
   const sourceMessageUrl = buildSourceMessageUrl(
     env,
@@ -168,8 +283,8 @@ export async function syncBugMessage(env: Env, client: DiscordRestClient, bugId:
 
   try {
     const relatedBug = bug.related_bug_id ? await getBugById(env.DB, bug.related_bug_id) : null
-    const relatedBugUrl = relatedBug ? buildBugLink(env, relatedBug) : null
-    const bugUrl = buildBugLink(env, bug)
+    const relatedBugUrl = relatedBug ? await resolveBugReportCardUrl(env, client, relatedBug) : null
+    const bugUrl = await resolveBugReportCardUrl(env, client, bug)
     const sourceMessageUrl = buildSourceMessageUrl(env, bug.source_guild_id, bug.source_channel_id, bug.source_message_id)
     const followerCount = await countSubscriptions(env.DB, 'bug', bug.id)
     await client.editMessage(
@@ -178,8 +293,8 @@ export async function syncBugMessage(env: Env, client: DiscordRestClient, bugId:
       renderLegacyBugMessage(bug, { relatedBug, relatedBugUrl, bugUrl, sourceMessageUrl, followerCount })
     )
 
-    const parentChannel = await client.getChannel(env.BUG_REPORT_CHANNEL_ID)
-    if (isForumChannel(parentChannel.type)) {
+    const parentChannel = await getParentReportChannel(client, bug.channel_id)
+    if (parentChannel && isForumChannel(parentChannel.type)) {
       await client.updateThreadTags(bug.channel_id, getBugForumTagIds(parentChannel, bug))
     }
   } catch (error) {
@@ -194,7 +309,7 @@ export async function syncFeatureMessage(env: Env, client: DiscordRestClient, fe
   }
 
   try {
-    const featureUrl = buildFeatureLink(env, feature)
+    const featureUrl = await resolveFeatureReportCardUrl(env, client, feature)
     const sourceMessageUrl = buildSourceMessageUrl(
       env,
       feature.source_guild_id,
@@ -208,8 +323,8 @@ export async function syncFeatureMessage(env: Env, client: DiscordRestClient, fe
       renderLegacyFeatureMessage(feature, { featureUrl, sourceMessageUrl, followerCount })
     )
 
-    const parentChannel = await client.getChannel(env.FEATURE_CHANNEL_ID)
-    if (isForumChannel(parentChannel.type)) {
+    const parentChannel = await getParentReportChannel(client, feature.channel_id)
+    if (parentChannel && isForumChannel(parentChannel.type)) {
       await client.updateThreadTags(feature.channel_id, getFeatureForumTagIds(parentChannel, feature))
     }
   } catch (error) {
@@ -235,6 +350,10 @@ export function logDiscordApiError(event: string, error: unknown, metadata?: Rec
 }
 
 export function getCreateMessageFailureMessage(kind: 'bug' | 'feature', error: unknown): string {
+  if (error instanceof MissingFeedbackChannelError) {
+    return `Saved, but no ${kind === 'bug' ? 'bug' : 'suggestion'} channel is configured for this server. An admin can run /feedback-config set.`
+  }
+
   if (error instanceof DiscordApiError) {
     if (error.status === 403 && error.discordCode === 50001) {
       return `${kind === 'bug' ? 'Bug' : 'Suggestion'} saved, but the bot cannot access the configured channel.`

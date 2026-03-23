@@ -450,6 +450,7 @@ export async function findSimilarBugs(
   const result = await db
     .prepare(`
       SELECT id, title, title_normalized, status, relationship_type, created_at
+      , channel_id, message_id
       FROM bugs
       WHERE relationship_type IS NULL OR relationship_type != 'DUPLICATE_OF'
       ORDER BY created_at DESC
@@ -462,6 +463,8 @@ export async function findSimilarBugs(
       id: Number(row.id),
       title: String(row.title),
       status: row.status as BugStatus,
+      channel_id: row.channel_id ? String(row.channel_id) : null,
+      message_id: row.message_id ? String(row.message_id) : null,
       created_at: String(row.created_at),
       score: scoreTitleMatch(title, String(row.title_normalized || row.title))
     }))
@@ -474,12 +477,24 @@ export async function findSimilarBugs(
 
   for (const match of matches) {
     if (duplicates.length < 3 && isActiveBugStatus(match.status)) {
-      duplicates.push({ id: match.id, title: match.title, status: match.status })
+      duplicates.push({
+        id: match.id,
+        title: match.title,
+        status: match.status,
+        channel_id: match.channel_id,
+        message_id: match.message_id
+      })
       continue
     }
 
     if (regressions.length < 2 && isClosedBugStatus(match.status)) {
-      regressions.push({ id: match.id, title: match.title, status: match.status })
+      regressions.push({
+        id: match.id,
+        title: match.title,
+        status: match.status,
+        channel_id: match.channel_id,
+        message_id: match.message_id
+      })
     }
   }
 

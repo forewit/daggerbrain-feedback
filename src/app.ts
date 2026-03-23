@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { InteractionResponseType, type APIApplicationCommandAutocompleteInteraction, type APIApplicationCommandInteraction, type APIInteractionResponse, type APIMessageComponentInteraction, type APIModalSubmitInteraction } from 'discord-api-types/v10'
+import { ChannelType, InteractionResponseType, type APIApplicationCommandAutocompleteInteraction, type APIApplicationCommandInteraction, type APIInteractionResponse, type APIMessageComponentInteraction, type APIModalSubmitInteraction } from 'discord-api-types/v10'
 import { BUG_MODAL_FIELDS } from './constants'
 import {
   createBugPreflightSession,
@@ -20,6 +20,7 @@ import {
   setFeatureMessageMetadata,
   updateFeatureStatus
 } from './db/features'
+import { getGuildFeedbackSettings, upsertGuildFeedbackSettings } from './db/guild-settings'
 import { addSubscription, isSubscribed, listSubscribedItemIds, removeSubscription } from './db/subscriptions'
 import { createBugFromSubmission } from './feedback/create-bug'
 import { createFeatureFromSubmission } from './feedback/create-feature'
@@ -46,6 +47,7 @@ import {
   getInteractionUserId,
   getMessageCommandTarget,
   hasAnyRole,
+  hasGuildConfigurationPermission,
   hasManageMessagesPermission,
   isApplicationCommandInteraction,
   isAutocompleteInteraction,
@@ -74,20 +76,28 @@ import {
   bugPreflightResponse,
   duplicateSelectionResponse,
   ephemeralMessage,
+  ephemeralRichMessage,
   featureManageResponse,
+  itemLinkButtonRows,
+  linkedItemKeyText,
   featureModalResponse,
   myItemsResponse,
   silentComponentAck,
   topBugsResponse
 } from './discord/messages'
-import { notifyBugFollowers, notifyFeatureFollowers } from './discord/notifications'
 import {
-  buildDashboardBugUrl,
-  buildDiscordMessageUrl,
+  formatBugStatusNotification,
+  formatFeatureStatusNotification,
+  notifyBugFollowers,
+  notifyFeatureFollowers
+} from './discord/notifications'
+import {
   createBugReportMessage,
   createFeatureReportMessage,
   getCreateMessageFailureMessage,
   logDiscordApiError,
+  resolveBugReportCardUrl,
+  resolveFeatureReportCardUrl,
   syncBugMessage,
   syncFeatureMessage
 } from './discord/publisher'
@@ -139,27 +149,74 @@ function isModeratorInteraction(interaction: { member?: { permissions?: string; 
   return hasManageMessagesPermission(interaction.member?.permissions) || hasAnyRole(interaction.member?.roles, env.DISCORD_MOD_ROLE_IDS)
 }
 
+function isSupportedFeedbackChannelType(channelType: number): boolean {
+  return channelType === ChannelType.GuildText
+    || channelType === ChannelType.GuildAnnouncement
+    || channelType === ChannelType.GuildForum
+    || channelType === ChannelType.GuildMedia
+}
+
+function formatConfiguredChannel(channelId: string | null, source: 'guild' | 'default' | 'unset'): string {
+  if (!channelId) {
+    return 'Not configured'
+  }
+
+  if (source === 'guild') {
+    return `<#${channelId}> (server setting)`
+  }
+
+  if (source === 'default') {
+    return `<#${channelId}> (default fallback)`
+  }
+
+  return `<#${channelId}>`
+}
+
+async function validateFeedbackChannelSelection(
+  client: DiscordRestClient,
+  guildId: string,
+  channelId: string,
+  kind: 'bug' | 'feature'
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  try {
+    const channel = await client.getChannel(channelId)
+    if (channel.guild_id !== guildId) {
+      return { ok: false, message: `The selected ${kind === 'bug' ? 'bug' : 'suggestion'} channel must belong to this server.` }
+    }
+
+    if (!isSupportedFeedbackChannelType(channel.type)) {
+      return {
+        ok: false,
+        message: `The selected ${kind === 'bug' ? 'bug' : 'suggestion'} channel must be a text, announcement, forum, or media channel.`
+      }
+    }
+
+    return { ok: true }
+  } catch {
+    return {
+      ok: false,
+      message: `I couldn't access that ${kind === 'bug' ? 'bug' : 'suggestion'} channel. Please make sure the bot can view it.`
+    }
+  }
+}
+
+async function buildFeedbackConfigResponse(env: Env, guildId: string): Promise<APIInteractionResponse> {
+  const settings = await getGuildFeedbackSettings(env.DB, guildId)
+  const bugChannelId = settings?.bug_report_channel_id ?? env.BUG_REPORT_CHANNEL_ID ?? null
+  const featureChannelId = settings?.feature_channel_id ?? env.FEATURE_CHANNEL_ID ?? null
+  const bugSource = settings?.bug_report_channel_id ? 'guild' : env.BUG_REPORT_CHANNEL_ID ? 'default' : 'unset'
+  const featureSource = settings?.feature_channel_id ? 'guild' : env.FEATURE_CHANNEL_ID ? 'default' : 'unset'
+
+  return ephemeralRichMessage([
+    'Feedback channel configuration:',
+    `Bug reports: ${formatConfiguredChannel(bugChannelId, bugSource)}`,
+    `Suggestions: ${formatConfiguredChannel(featureChannelId, featureSource)}`
+  ].join('\n'))
+}
+
 function responseWithCookie(response: Response, cookieValue: string): Response {
   response.headers.append('Set-Cookie', cookieValue)
   return response
-}
-
-async function canManageDashboard(env: Env, client: DiscordRestClient, cookieHeader: string | null): Promise<boolean> {
-  if (!env.COOKIE_SECRET || !env.DISCORD_GUILD_ID || !env.DISCORD_MOD_ROLE_IDS) {
-    return false
-  }
-
-  const userId = await getDashboardSessionUserId(env, cookieHeader)
-  if (!userId) {
-    return false
-  }
-
-  try {
-    const member = await client.getGuildMember(env.DISCORD_GUILD_ID, userId)
-    return hasAnyRole(member.roles, env.DISCORD_MOD_ROLE_IDS)
-  } catch {
-    return false
-  }
 }
 
 async function getDashboardSessionUserId(env: Env, cookieHeader: string | null): Promise<string | null> {
@@ -172,9 +229,122 @@ async function getDashboardSessionUserId(env: Env, cookieHeader: string | null):
   return session?.userId ?? null
 }
 
-function buildCreatedMessage(kind: string, id: number, messageUrl: string | null, fallbackUrl?: string | null): string {
-  const url = messageUrl ?? fallbackUrl ?? null
-  return url ? `${kind} #${id} is live: ${url}` : `${kind} #${id} is live.`
+function isDashboardAuthConfigured(env: Env): boolean {
+  return Boolean(env.COOKIE_SECRET && env.DISCORD_CLIENT_SECRET && env.PUBLIC_APP_URL)
+}
+
+async function getDashboardAccessContext(
+  env: Env,
+  client: DiscordRestClient,
+  cookieHeader: string | null
+): Promise<{ viewerId: string | null; canManage: boolean; authConfigured: boolean }> {
+  const viewerId = await getDashboardSessionUserId(env, cookieHeader)
+  const authConfigured = isDashboardAuthConfigured(env)
+
+  if (!viewerId || !env.DISCORD_GUILD_ID || !env.DISCORD_MOD_ROLE_IDS) {
+    return { viewerId, canManage: false, authConfigured }
+  }
+
+  try {
+    const member = await client.getGuildMember(env.DISCORD_GUILD_ID, viewerId)
+    return {
+      viewerId,
+      canManage: hasAnyRole(member.roles, env.DISCORD_MOD_ROLE_IDS),
+      authConfigured
+    }
+  } catch {
+    return { viewerId, canManage: false, authConfigured }
+  }
+}
+
+function buildCreatedMessage(kind: 'bug' | 'feature', id: number, messageUrl: string | null): string {
+  return `${linkedItemKeyText(kind, id, messageUrl)} is live.`
+}
+
+async function resolveBugMessageUrl(env: Env, client: DiscordRestClient, bug: {
+  id: number
+  channel_id?: string | null
+  message_id?: string | null
+  source_guild_id?: string | null
+}): Promise<string | null> {
+  return resolveBugReportCardUrl(env, client, {
+    id: bug.id,
+    channel_id: bug.channel_id ?? null,
+    message_id: bug.message_id ?? null,
+    source_guild_id: bug.source_guild_id ?? null
+  })
+}
+
+async function resolveFeatureMessageUrl(
+  env: Env,
+  client: DiscordRestClient,
+  feature: { channel_id?: string | null; message_id?: string | null; source_guild_id?: string | null }
+): Promise<string | null> {
+  return resolveFeatureReportCardUrl(env, client, {
+    channel_id: feature.channel_id ?? null,
+    message_id: feature.message_id ?? null,
+    source_guild_id: feature.source_guild_id ?? null
+  })
+}
+
+function buildStatusMessage(kind: 'bug' | 'feature', id: number, status: string, messageUrl: string | null): string {
+  return `${linkedItemKeyText(kind, id, messageUrl)} is now ${status}.`
+}
+
+function buildAlreadyStatusMessage(kind: 'bug' | 'feature', id: number, status: string, messageUrl: string | null): string {
+  return `${linkedItemKeyText(kind, id, messageUrl)} is already ${status}.`
+}
+
+function buildLinkedBugRelationMessage(bugId: number, bugUrl: string | null, targetBugId: number, targetBugUrl: string | null, relation: string): string {
+  return `Linked ${linkedItemKeyText('bug', bugId, bugUrl, { capitalizeKind: false })} to ${linkedItemKeyText('bug', targetBugId, targetBugUrl, {
+    capitalizeKind: false
+  })} as ${relation}.`
+}
+
+function buildFollowMessage(kind: 'bug' | 'feature', id: number, messageUrl: string | null, following: boolean): string {
+  const item = linkedItemKeyText(kind, id, messageUrl, { capitalizeKind: false })
+  return following ? `You are now following ${item}.` : `You will no longer receive updates for ${item}.`
+}
+
+function buildItemLinkRows(kind: 'bug' | 'feature', id: number, messageUrl: string | null) {
+  return itemLinkButtonRows([{ kind, id, url: messageUrl }])
+}
+
+function buildBugRelationLinkRows(
+  bugId: number,
+  bugUrl: string | null,
+  targetBugId: number,
+  targetBugUrl: string | null
+) {
+  return itemLinkButtonRows([
+    { kind: 'bug', id: bugId, url: bugUrl },
+    { kind: 'bug', id: targetBugId, url: targetBugUrl }
+  ])
+}
+
+function summarizeResponseLinkRows(rows: unknown[]): Array<{ labels: Array<string | null>; urls: Array<string | null> }> {
+  return rows
+    .filter(
+      (row): row is { components?: Array<{ label?: string; url?: string }> } =>
+        row !== null && typeof row === 'object' && 'components' in row
+    )
+    .map((row) => ({
+      labels: (row.components ?? []).map((component) => component.label ?? null),
+      urls: (row.components ?? []).map((component) => component.url ?? null)
+    }))
+}
+
+function logInteractionResponseDebug(
+  event: string,
+  content: string,
+  rows: unknown[],
+  metadata?: Record<string, unknown>
+): void {
+  console.log(event, {
+    content,
+    linkRows: summarizeResponseLinkRows(rows),
+    ...(metadata ?? {})
+  })
 }
 
 async function createFeatureSubmissionResponse(
@@ -194,12 +364,18 @@ async function createFeatureSubmissionResponse(
     return ephemeralMessage(result.message)
   }
 
-  await addSubscription(env.DB, 'feature', result.feature.id, userId)
-
   try {
     const message = await createFeatureReportMessage(env, client, result.feature)
     await setFeatureMessageMetadata(env.DB, result.feature.id, message.channel_id, message.id)
-    return ephemeralMessage(buildCreatedMessage('Suggestion', result.feature.id, buildDiscordMessageUrl(env, message.channel_id, message.id)))
+    const messageUrl = await resolveFeatureReportCardUrl(env, client, {
+      channel_id: message.channel_id,
+      message_id: message.id,
+      source_guild_id: input.source_guild_id ?? null
+    })
+    const content = buildCreatedMessage('feature', result.feature.id, messageUrl)
+    const rows = buildItemLinkRows('feature', result.feature.id, messageUrl)
+    logInteractionResponseDebug('discord.interaction_feature_created', content, rows, { featureId: result.feature.id, messageUrl })
+    return ephemeralRichMessage(content, rows)
   } catch (error) {
     logDiscordApiError('discord.create_feature_message_failed', error, { featureId: result.feature.id })
     return ephemeralMessage(getCreateMessageFailureMessage('feature', error))
@@ -226,11 +402,11 @@ async function createBugSubmissionResponse(
     return ephemeralMessage(result.message)
   }
 
-  await addSubscription(env.DB, 'bug', result.bug.id, userId)
-
   if (options?.relationshipType === 'DUPLICATE_OF' && result.targetBug) {
     await syncBugMessage(env, client, result.targetBug.id)
-    return ephemeralMessage(buildCreatedMessage('Bug', result.bug.id, null, buildDashboardBugUrl(env, result.targetBug.id)))
+    const content = buildCreatedMessage('bug', result.bug.id, null)
+    logInteractionResponseDebug('discord.interaction_bug_created_duplicate', content, [], { bugId: result.bug.id })
+    return ephemeralRichMessage(content)
   }
 
   try {
@@ -241,9 +417,16 @@ async function createBugSubmissionResponse(
       await syncBugMessage(env, client, result.targetBug.id)
     }
 
-    return ephemeralMessage(
-      buildCreatedMessage('Bug', result.bug.id, buildDiscordMessageUrl(env, message.channel_id, message.id), buildDashboardBugUrl(env, result.bug.id))
-    )
+    const messageUrl = await resolveBugReportCardUrl(env, client, {
+      id: result.bug.id,
+      channel_id: message.channel_id,
+      message_id: message.id,
+      source_guild_id: input.source_guild_id ?? null
+    })
+    const content = buildCreatedMessage('bug', result.bug.id, messageUrl)
+    const rows = buildItemLinkRows('bug', result.bug.id, messageUrl)
+    logInteractionResponseDebug('discord.interaction_bug_created', content, rows, { bugId: result.bug.id, messageUrl })
+    return ephemeralRichMessage(content, rows)
   } catch (error) {
     if (options?.relationshipType === 'REGRESSION_OF' && result.targetBug) {
       await syncBugMessage(env, client, result.targetBug.id)
@@ -259,6 +442,19 @@ async function handleBugReportCommand(env: Env, _client: DiscordRestClient, inte
   if (!userId) {
     return ephemeralMessage('Unable to determine the reporting user.')
   }
+
+  await createBugPreflightSession(env.DB, {
+    sessionId: interaction.id,
+    userId,
+    title: '',
+    titleNormalized: '',
+    platform: null,
+    severity: null,
+    screenshotUrl: null,
+    sourceGuildId: getInteractionGuildId(interaction),
+    sourceChannelId: getInteractionChannelId(interaction),
+    sourceMessageId: null
+  })
 
   return bugModalResponse({
     sessionId: interaction.id,
@@ -278,7 +474,63 @@ async function handleFeatureReportCommand(
     return ephemeralMessage('Unable to determine the reporting user.')
   }
 
-  return featureModalResponse('')
+  return featureModalResponse('', {
+    sourceGuildId: getInteractionGuildId(interaction),
+    sourceChannelId: getInteractionChannelId(interaction),
+    sourceMessageId: null
+  })
+}
+
+async function handleFeedbackConfigCommand(
+  env: Env,
+  client: DiscordRestClient,
+  interaction: APIApplicationCommandInteraction
+): Promise<APIInteractionResponse> {
+  const guildId = getInteractionGuildId(interaction)
+  if (!guildId) {
+    return ephemeralMessage('This command can only be used inside a server.')
+  }
+
+  if (!hasGuildConfigurationPermission(interaction.member?.permissions)) {
+    return ephemeralMessage('You need Manage Server or Manage Channels permission to configure feedback channels.')
+  }
+
+  const path = getCommandPath(interaction)
+  if (path[1] === 'show') {
+    return buildFeedbackConfigResponse(env, guildId)
+  }
+
+  if (path[1] !== 'set') {
+    return ephemeralMessage('Unknown command.')
+  }
+
+  const selectedBugChannelId = getCommandOptionString(interaction, 'bug_channel')
+  const selectedFeatureChannelId = getCommandOptionString(interaction, 'suggestion_channel')
+  if (!selectedBugChannelId && !selectedFeatureChannelId) {
+    return ephemeralMessage('Select at least one channel to update.')
+  }
+
+  if (selectedBugChannelId) {
+    const validation = await validateFeedbackChannelSelection(client, guildId, selectedBugChannelId, 'bug')
+    if (!validation.ok) {
+      return ephemeralMessage(validation.message)
+    }
+  }
+
+  if (selectedFeatureChannelId) {
+    const validation = await validateFeedbackChannelSelection(client, guildId, selectedFeatureChannelId, 'feature')
+    if (!validation.ok) {
+      return ephemeralMessage(validation.message)
+    }
+  }
+
+  const current = await getGuildFeedbackSettings(env.DB, guildId)
+  await upsertGuildFeedbackSettings(env.DB, guildId, {
+    bugReportChannelId: selectedBugChannelId ?? current?.bug_report_channel_id ?? null,
+    featureChannelId: selectedFeatureChannelId ?? current?.feature_channel_id ?? null
+  })
+
+  return buildFeedbackConfigResponse(env, guildId)
 }
 
 async function updateFeatureLifecycleStatus(
@@ -287,14 +539,17 @@ async function updateFeatureLifecycleStatus(
   featureId: number,
   nextStatus: FeatureStatus,
   note?: string | null
-): Promise<{ ok: true; featureId: number; previousStatus: FeatureStatus; nextStatus: FeatureStatus } | { ok: false; message: string }> {
+): Promise<
+  | { ok: true; featureId: number; previousStatus: FeatureStatus; nextStatus: FeatureStatus; feature: NonNullable<Awaited<ReturnType<typeof getFeatureById>>> }
+  | { ok: false; message: string; feature?: NonNullable<Awaited<ReturnType<typeof getFeatureById>>> }
+> {
   const feature = await getFeatureById(env.DB, featureId)
   if (!feature) {
     return { ok: false, message: 'Suggestion not found.' }
   }
 
   if (feature.status === nextStatus && (feature.status_note ?? null) === (note ?? null)) {
-    return { ok: false, message: `Suggestion #${feature.id} is already ${feature.status}.` }
+    return { ok: false, message: `Suggestion #${feature.id} is already ${feature.status}.`, feature }
   }
 
   await updateFeatureStatus(env.DB, feature.id, nextStatus, { statusNote: note ?? null })
@@ -302,9 +557,10 @@ async function updateFeatureLifecycleStatus(
   const updated = await getFeatureById(env.DB, feature.id)
   if (updated) {
     await notifyFeatureFollowers(env, client, updated)
+    return { ok: true, featureId: feature.id, previousStatus: feature.status, nextStatus, feature: updated }
   }
 
-  return { ok: true, featureId: feature.id, previousStatus: feature.status, nextStatus }
+  return { ok: true, featureId: feature.id, previousStatus: feature.status, nextStatus, feature }
 }
 
 async function handleBugStatusCommand(env: Env, client: DiscordRestClient, interaction: APIApplicationCommandInteraction): Promise<APIInteractionResponse> {
@@ -324,6 +580,17 @@ async function handleBugStatusCommand(env: Env, client: DiscordRestClient, inter
 
   const result = await updateBugLifecycleStatus(env.DB, parsed.data.bugId, parsed.data.status, { note: parsed.data.note ?? null })
   if (!result.ok) {
+    if (result.bugId) {
+      const bug = await getBugById(env.DB, result.bugId)
+      if (bug) {
+        const bugUrl = await resolveBugMessageUrl(env, client, bug)
+        const content = buildAlreadyStatusMessage('bug', bug.id, bug.status, bugUrl)
+        const rows = buildItemLinkRows('bug', bug.id, bugUrl)
+        logInteractionResponseDebug('discord.interaction_bug_status_already', content, rows, { bugId: bug.id, bugUrl })
+        return ephemeralRichMessage(content, rows)
+      }
+    }
+
     return ephemeralMessage(result.message)
   }
 
@@ -331,9 +598,14 @@ async function handleBugStatusCommand(env: Env, client: DiscordRestClient, inter
   const bug = await getBugById(env.DB, result.bugId)
   if (bug) {
     await notifyBugFollowers(env, client, bug)
+    const bugUrl = await resolveBugMessageUrl(env, client, bug)
+    const content = formatBugStatusNotification(bug, bugUrl)
+    const rows = buildItemLinkRows('bug', bug.id, bugUrl)
+    logInteractionResponseDebug('discord.interaction_bug_status_updated', content, rows, { bugId: bug.id, bugUrl })
+    return ephemeralRichMessage(content, rows)
   }
 
-  return ephemeralMessage(`Bug #${result.bugId} is now ${result.nextStatus}.`)
+  return ephemeralRichMessage(buildStatusMessage('bug', result.bugId, result.nextStatus, null))
 }
 
 async function handleFeatureStatusCommand(env: Env, client: DiscordRestClient, interaction: APIApplicationCommandInteraction): Promise<APIInteractionResponse> {
@@ -353,10 +625,31 @@ async function handleFeatureStatusCommand(env: Env, client: DiscordRestClient, i
 
   const result = await updateFeatureLifecycleStatus(env, client, parsed.data.featureId, parsed.data.status, parsed.data.note ?? null)
   if (!result.ok) {
+    if ('feature' in result && result.feature) {
+      const featureUrl = await resolveFeatureMessageUrl(env, client, result.feature)
+      const content = buildAlreadyStatusMessage('feature', result.feature.id, result.feature.status, featureUrl)
+      const rows = buildItemLinkRows('feature', result.feature.id, featureUrl)
+      logInteractionResponseDebug('discord.interaction_feature_status_already', content, rows, {
+        featureId: result.feature.id,
+        featureUrl
+      })
+      return ephemeralRichMessage(
+        content,
+        rows
+      )
+    }
+
     return ephemeralMessage(result.message)
   }
 
-  return ephemeralMessage(`Suggestion #${result.featureId} is now ${result.nextStatus}.`)
+  const featureUrl = await resolveFeatureMessageUrl(env, client, result.feature)
+  const featureStatusContent = formatFeatureStatusNotification(result.feature, featureUrl)
+  const featureStatusRows = buildItemLinkRows('feature', result.featureId, featureUrl)
+  logInteractionResponseDebug('discord.interaction_feature_status_updated', featureStatusContent, featureStatusRows, {
+    featureId: result.featureId,
+    featureUrl
+  })
+  return ephemeralRichMessage(featureStatusContent, featureStatusRows)
 }
 
 async function handleBugLinkCommand(env: Env, client: DiscordRestClient, interaction: APIApplicationCommandInteraction): Promise<APIInteractionResponse> {
@@ -382,7 +675,15 @@ async function handleBugLinkCommand(env: Env, client: DiscordRestClient, interac
 
     await syncBugMessage(env, client, result.bugId)
     await syncBugMessage(env, client, result.targetBugId)
-    return ephemeralMessage(`Linked bug #${result.bugId} to bug #${result.targetBugId} as a duplicate.`)
+    const [bug, targetBug] = await Promise.all([getBugById(env.DB, result.bugId), getBugById(env.DB, result.targetBugId)])
+    const [bugUrl, targetBugUrl] = await Promise.all([
+      bug ? resolveBugMessageUrl(env, client, bug) : Promise.resolve(null),
+      targetBug ? resolveBugMessageUrl(env, client, targetBug) : Promise.resolve(null)
+    ])
+    return ephemeralRichMessage(
+      buildLinkedBugRelationMessage(result.bugId, bugUrl, result.targetBugId, targetBugUrl, 'a duplicate'),
+      buildBugRelationLinkRows(result.bugId, bugUrl, result.targetBugId, targetBugUrl)
+    )
   }
 
   const result = await linkBugAsRegression(env.DB, parsed.data.bugId, parsed.data.targetBugId)
@@ -392,7 +693,15 @@ async function handleBugLinkCommand(env: Env, client: DiscordRestClient, interac
 
   await syncBugMessage(env, client, result.bugId)
   await syncBugMessage(env, client, result.targetBugId)
-  return ephemeralMessage(`Linked bug #${result.bugId} to bug #${result.targetBugId} as a regression.`)
+  const [bug, targetBug] = await Promise.all([getBugById(env.DB, result.bugId), getBugById(env.DB, result.targetBugId)])
+  const [bugUrl, targetBugUrl] = await Promise.all([
+    bug ? resolveBugMessageUrl(env, client, bug) : Promise.resolve(null),
+    targetBug ? resolveBugMessageUrl(env, client, targetBug) : Promise.resolve(null)
+  ])
+  return ephemeralRichMessage(
+    buildLinkedBugRelationMessage(result.bugId, bugUrl, result.targetBugId, targetBugUrl, 'a regression'),
+    buildBugRelationLinkRows(result.bugId, bugUrl, result.targetBugId, targetBugUrl)
+  )
 }
 
 async function handleMessageCommand(env: Env, interaction: APIApplicationCommandInteraction): Promise<APIInteractionResponse> {
@@ -451,13 +760,26 @@ async function handleCommand(env: Env, client: DiscordRestClient, interaction: A
 
   if (path[0] === 'bugs') {
     if (path[1] === 'top') {
-      return topBugsResponse(await listBugs(env.DB, 'open', 'top', { limit: 5 }))
+      const bugs = await listBugs(env.DB, 'open', 'top', { limit: 5 })
+      return topBugsResponse(
+        await Promise.all(bugs.map(async (bug) => ({
+          ...bug,
+          message_url: await resolveBugMessageUrl(env, client, bug)
+        })))
+      )
     }
 
     if (path[1] === 'mine') {
       const userId = getInteractionUserId(interaction)
       if (!userId) return ephemeralMessage('Unable to determine the acting user.')
-      return myItemsResponse('bug', await listBugs(env.DB, 'all', 'newest', { reporterId: userId, limit: 5 }))
+      const bugs = await listBugs(env.DB, 'all', 'newest', { reporterId: userId, limit: 5 })
+      return myItemsResponse(
+        'bug',
+        await Promise.all(bugs.map(async (bug) => ({
+          ...bug,
+          message_url: await resolveBugMessageUrl(env, client, bug)
+        })))
+      )
     }
 
     if (path[1] === 'status') {
@@ -475,15 +797,33 @@ async function handleCommand(env: Env, client: DiscordRestClient, interaction: A
     return handleFeatureReportCommand(env, client, interaction)
   }
 
+  if (path[0] === 'feedback-config') {
+    return handleFeedbackConfigCommand(env, client, interaction)
+  }
+
   if (path[0] === 'suggestions' || path[0] === 'feedback') {
     if (path[1] === 'top') {
-      return myItemsResponse('suggestion', await listFeatures(env.DB, { status: 'active', sort: 'top', limit: 5 }))
+      const features = await listFeatures(env.DB, { status: 'active', sort: 'top', limit: 5 })
+      return myItemsResponse(
+        'suggestion',
+        await Promise.all(features.map(async (feature) => ({
+          ...feature,
+          message_url: await resolveFeatureMessageUrl(env, client, feature)
+        })))
+      )
     }
 
     if (path[1] === 'mine') {
       const userId = getInteractionUserId(interaction)
       if (!userId) return ephemeralMessage('Unable to determine the acting user.')
-      return myItemsResponse('suggestion', await listFeatures(env.DB, { status: 'all', sort: 'newest', reporterId: userId, limit: 5 }))
+      const features = await listFeatures(env.DB, { status: 'all', sort: 'newest', reporterId: userId, limit: 5 })
+      return myItemsResponse(
+        'suggestion',
+        await Promise.all(features.map(async (feature) => ({
+          ...feature,
+          message_url: await resolveFeatureMessageUrl(env, client, feature)
+        })))
+      )
     }
 
     if (path[1] === 'status') {
@@ -630,7 +970,16 @@ async function handleModalSubmit(env: Env, client: DiscordRestClient, interactio
 
     const matches = await findSimilarBugs(env.DB, derivedTitle)
     if (matches.duplicates.length > 0 || matches.regressions.length > 0) {
-      return bugPreflightResponse(modalState.sessionId ?? interaction.id, derivedTitle, matches.duplicates, matches.regressions)
+      const [duplicates, regressions] = await Promise.all([
+        Promise.all(matches.duplicates.map(async (bug) => ({ ...bug, message_url: await resolveBugMessageUrl(env, client, bug) }))),
+        Promise.all(matches.regressions.map(async (bug) => ({ ...bug, message_url: await resolveBugMessageUrl(env, client, bug) })))
+      ])
+      return bugPreflightResponse(
+        modalState.sessionId ?? interaction.id,
+        derivedTitle,
+        duplicates,
+        regressions
+      )
     }
   }
 
@@ -710,10 +1059,34 @@ async function handleComponent(env: Env, client: DiscordRestClient, interaction:
       await syncFeatureMessage(env, client, subscriptionAction.itemId)
     }
 
-    return ephemeralMessage(
-      currentlySubscribed
-        ? `You will no longer receive updates for ${subscriptionAction.itemKind === 'feature' ? 'suggestion' : 'bug'} #${subscriptionAction.itemId}.`
-        : `You are now following ${subscriptionAction.itemKind === 'feature' ? 'suggestion' : 'bug'} #${subscriptionAction.itemId}.`
+    if (subscriptionAction.itemKind === 'bug') {
+      const bug = await getBugById(env.DB, subscriptionAction.itemId)
+      const bugUrl = bug ? await resolveBugMessageUrl(env, client, bug) : null
+      const content = buildFollowMessage('bug', subscriptionAction.itemId, bugUrl, !currentlySubscribed)
+      const rows = buildItemLinkRows('bug', subscriptionAction.itemId, bugUrl)
+      logInteractionResponseDebug('discord.interaction_bug_follow_updated', content, rows, {
+        bugId: subscriptionAction.itemId,
+        bugUrl,
+        following: !currentlySubscribed
+      })
+      return ephemeralRichMessage(
+        content,
+        rows
+      )
+    }
+
+    const feature = await getFeatureById(env.DB, subscriptionAction.itemId)
+    const featureUrl = feature ? await resolveFeatureMessageUrl(env, client, feature) : null
+    const featureFollowContent = buildFollowMessage('feature', subscriptionAction.itemId, featureUrl, !currentlySubscribed)
+    const featureFollowRows = buildItemLinkRows('feature', subscriptionAction.itemId, featureUrl)
+    logInteractionResponseDebug('discord.interaction_feature_follow_updated', featureFollowContent, featureFollowRows, {
+      featureId: subscriptionAction.itemId,
+      featureUrl,
+      following: !currentlySubscribed
+    })
+    return ephemeralRichMessage(
+      featureFollowContent,
+      featureFollowRows
     )
   }
 
@@ -725,11 +1098,11 @@ async function handleComponent(env: Env, client: DiscordRestClient, interaction:
 
     if (manageAction.itemKind === 'bug') {
       const bug = await getBugById(env.DB, manageAction.itemId)
-      return bug ? bugManageResponse(bug) : ephemeralMessage('Bug not found.')
+      return bug ? bugManageResponse(bug, await resolveBugMessageUrl(env, client, bug)) : ephemeralMessage('Bug not found.')
     }
 
     const feature = await getFeatureById(env.DB, manageAction.itemId)
-    return feature ? featureManageResponse(feature) : ephemeralMessage('Suggestion not found.')
+    return feature ? featureManageResponse(feature, await resolveFeatureMessageUrl(env, client, feature)) : ephemeralMessage('Suggestion not found.')
   }
 
   const statusAction = parseStatusAction(interaction.data.custom_id)
@@ -741,6 +1114,17 @@ async function handleComponent(env: Env, client: DiscordRestClient, interaction:
     if (statusAction.itemKind === 'bug') {
       const result = await updateBugLifecycleStatus(env.DB, statusAction.itemId, statusAction.status as BugStatus)
       if (!result.ok) {
+        if (result.bugId) {
+          const bug = await getBugById(env.DB, result.bugId)
+          if (bug) {
+            const bugUrl = await resolveBugMessageUrl(env, client, bug)
+            const content = buildAlreadyStatusMessage('bug', bug.id, bug.status, bugUrl)
+            const rows = buildItemLinkRows('bug', bug.id, bugUrl)
+            logInteractionResponseDebug('discord.component_bug_status_already', content, rows, { bugId: bug.id, bugUrl })
+            return ephemeralRichMessage(content, rows)
+          }
+        }
+
         return ephemeralMessage(result.message)
       }
 
@@ -748,12 +1132,45 @@ async function handleComponent(env: Env, client: DiscordRestClient, interaction:
       const bug = await getBugById(env.DB, result.bugId)
       if (bug) {
         await notifyBugFollowers(env, client, bug)
+        const bugUrl = await resolveBugMessageUrl(env, client, bug)
+        const content = formatBugStatusNotification(bug, bugUrl)
+        const rows = buildItemLinkRows('bug', bug.id, bugUrl)
+        logInteractionResponseDebug('discord.component_bug_status_updated', content, rows, { bugId: bug.id, bugUrl })
+        return ephemeralRichMessage(content, rows)
       }
-      return ephemeralMessage(`Bug #${result.bugId} is now ${result.nextStatus}.`)
+      return ephemeralRichMessage(buildStatusMessage('bug', result.bugId, result.nextStatus, null))
     }
 
     const result = await updateFeatureLifecycleStatus(env, client, statusAction.itemId, statusAction.status as FeatureStatus)
-    return result.ok ? ephemeralMessage(`Suggestion #${result.featureId} is now ${result.nextStatus}.`) : ephemeralMessage(result.message)
+    if (!result.ok) {
+      if (result.feature) {
+        const featureUrl = await resolveFeatureMessageUrl(env, client, result.feature)
+        const content = buildAlreadyStatusMessage('feature', result.feature.id, result.feature.status, featureUrl)
+        const rows = buildItemLinkRows('feature', result.feature.id, featureUrl)
+        logInteractionResponseDebug('discord.component_feature_status_already', content, rows, {
+          featureId: result.feature.id,
+          featureUrl
+        })
+        return ephemeralRichMessage(
+          content,
+          rows
+        )
+      }
+
+      return ephemeralMessage(result.message)
+    }
+
+    const featureUrl2 = await resolveFeatureMessageUrl(env, client, result.feature)
+    const featureStatusContent2 = formatFeatureStatusNotification(result.feature, featureUrl2)
+    const featureStatusRows2 = buildItemLinkRows('feature', result.featureId, featureUrl2)
+    logInteractionResponseDebug('discord.component_feature_status_updated', featureStatusContent2, featureStatusRows2, {
+      featureId: result.featureId,
+      featureUrl: featureUrl2
+    })
+    return ephemeralRichMessage(
+      featureStatusContent2,
+      featureStatusRows2
+    )
   }
 
   const featureVote = parseFeatureUpvote(interaction.data.custom_id)
@@ -924,6 +1341,11 @@ export function createApp() {
   })
 
   app.get('/api/bugs', async (c) => {
+    const access = await getDashboardAccessContext(c.env, new DiscordRestClient(c.env), c.req.header('Cookie') ?? null)
+    if (!access.viewerId) {
+      return c.json({ error: 'Unauthorized' }, 401)
+    }
+
     const query = bugsQuerySchema.parse({
       status: c.req.query('status') ?? 'open',
       sort: c.req.query('sort') ?? 'top'
@@ -933,12 +1355,22 @@ export function createApp() {
   })
 
   app.get('/api/features', async (c) => {
+    const access = await getDashboardAccessContext(c.env, new DiscordRestClient(c.env), c.req.header('Cookie') ?? null)
+    if (!access.viewerId) {
+      return c.json({ error: 'Unauthorized' }, 401)
+    }
+
     const status = c.req.query('status') === 'resolved' ? 'resolved' : c.req.query('status') === 'all' ? 'all' : 'active'
     const sort = c.req.query('sort') === 'newest' ? 'newest' : 'top'
     return c.json({ features: await listFeatures(c.env.DB, { status, sort, limit: 50 }) })
   })
 
   app.get('/api/suggestions', async (c) => {
+    const access = await getDashboardAccessContext(c.env, new DiscordRestClient(c.env), c.req.header('Cookie') ?? null)
+    if (!access.viewerId) {
+      return c.json({ error: 'Unauthorized' }, 401)
+    }
+
     const status = c.req.query('status') === 'resolved' ? 'resolved' : c.req.query('status') === 'all' ? 'all' : 'active'
     const sort = c.req.query('sort') === 'newest' ? 'newest' : 'top'
     return c.json({ suggestions: await listFeatures(c.env.DB, { status, sort, limit: 50 }) })
@@ -949,8 +1381,15 @@ export function createApp() {
     const suggestionFilter = getDashboardSuggestionFilter(c.req.query('suggestionStatus') ?? c.req.query('feedbackStatus'))
     const cookieHeader = c.req.header('Cookie') ?? null
     const client = new DiscordRestClient(c.env)
-    const viewerId = await getDashboardSessionUserId(c.env, cookieHeader)
-    const canManage = await canManageDashboard(c.env, client, cookieHeader)
+    const access = await getDashboardAccessContext(c.env, client, cookieHeader)
+
+    if (!access.viewerId) {
+      if (!access.authConfigured) {
+        return c.text('Dashboard authentication is not configured.', 501)
+      }
+
+      return c.redirect('/auth/discord/start')
+    }
 
     const [rawBugs, rawFeatures] = await Promise.all([
       listBugs(c.env.DB, mapBugFilterToStatus(bugFilter), 'newest'),
@@ -960,42 +1399,41 @@ export function createApp() {
     let followedBugIds = new Set<number>()
     let followedFeatureIds = new Set<number>()
 
-    if (viewerId) {
-      ;[followedBugIds, followedFeatureIds] = await Promise.all([
-        listSubscribedItemIds(
-          c.env.DB,
-          'bug',
-          viewerId,
-          rawBugs.map((bug) => bug.id)
-        ),
-        listSubscribedItemIds(
-          c.env.DB,
-          'feature',
-          viewerId,
-          rawFeatures.map((feature) => feature.id)
-        )
-      ])
-    }
+    ;[followedBugIds, followedFeatureIds] = await Promise.all([
+      listSubscribedItemIds(
+        c.env.DB,
+        'bug',
+        access.viewerId,
+        rawBugs.map((bug) => bug.id)
+      ),
+      listSubscribedItemIds(
+        c.env.DB,
+        'feature',
+        access.viewerId,
+        rawFeatures.map((feature) => feature.id)
+      )
+    ])
 
-    const bugs = rawBugs.map((bug) => ({
-      ...bug,
-      viewer_is_following: followedBugIds.has(bug.id),
-      message_url: buildDiscordMessageUrl(c.env, bug.channel_id ?? null, bug.message_id ?? null),
-      source_message_url:
-        bug.source_guild_id && bug.source_channel_id && bug.source_message_id
-          ? `https://discord.com/channels/${bug.source_guild_id}/${bug.source_channel_id}/${bug.source_message_id}`
-          : null
-    }))
-
-    const features = rawFeatures.map((feature) => ({
-      ...feature,
-      viewer_is_following: followedFeatureIds.has(feature.id),
-      message_url: buildDiscordMessageUrl(c.env, feature.channel_id ?? null, feature.message_id ?? null),
-      source_message_url:
-        feature.source_guild_id && feature.source_channel_id && feature.source_message_id
-          ? `https://discord.com/channels/${feature.source_guild_id}/${feature.source_channel_id}/${feature.source_message_id}`
-          : null
-    }))
+    const [bugs, features] = await Promise.all([
+      Promise.all(rawBugs.map(async (bug) => ({
+        ...bug,
+        viewer_is_following: followedBugIds.has(bug.id),
+        message_url: await resolveBugReportCardUrl(c.env, client, bug),
+        source_message_url:
+          bug.source_guild_id && bug.source_channel_id && bug.source_message_id
+            ? `https://discord.com/channels/${bug.source_guild_id}/${bug.source_channel_id}/${bug.source_message_id}`
+            : null
+      }))),
+      Promise.all(rawFeatures.map(async (feature) => ({
+        ...feature,
+        viewer_is_following: followedFeatureIds.has(feature.id),
+        message_url: await resolveFeatureReportCardUrl(c.env, client, feature),
+        source_message_url:
+          feature.source_guild_id && feature.source_channel_id && feature.source_message_id
+            ? `https://discord.com/channels/${feature.source_guild_id}/${feature.source_channel_id}/${feature.source_message_id}`
+            : null
+      })))
+    ])
 
     return c.html(
       renderDashboardPage({
@@ -1003,10 +1441,10 @@ export function createApp() {
         features,
         currentBugFilter: bugFilter,
         currentSuggestionFilter: suggestionFilter,
-        canManage,
-        isAuthenticated: Boolean(viewerId),
-        authUrl: !viewerId && c.env.COOKIE_SECRET && c.env.DISCORD_CLIENT_SECRET && c.env.PUBLIC_APP_URL ? '/auth/discord/start' : null,
-        logoutUrl: viewerId ? '/auth/logout' : null
+        canManage: access.canManage,
+        isAuthenticated: true,
+        authUrl: null,
+        logoutUrl: '/auth/logout'
       })
     )
   })
@@ -1022,19 +1460,21 @@ export function createApp() {
       String(formData.get('suggestionStatus') ?? formData.get('feedbackStatus') ?? 'all')
     )
     const cookieHeader = c.req.header('Cookie') ?? null
-    const viewerId = await getDashboardSessionUserId(c.env, cookieHeader)
-    const canManage = await canManageDashboard(c.env, client, cookieHeader)
-    const authConfigured = Boolean(c.env.COOKIE_SECRET && c.env.DISCORD_CLIENT_SECRET && c.env.PUBLIC_APP_URL)
+    const access = await getDashboardAccessContext(c.env, client, cookieHeader)
 
     if (!Number.isInteger(id) || id <= 0) {
       return c.redirect(buildDashboardUrl(bugFilter, suggestionFilter))
     }
 
-    if ((action === 'upvote' || action === 'follow') && !viewerId) {
-      return c.redirect(authConfigured ? '/auth/discord/start' : buildDashboardUrl(bugFilter, suggestionFilter))
+    if ((action === 'upvote' || action === 'follow') && !access.viewerId) {
+      if (!access.authConfigured) {
+        return c.text('Dashboard authentication is not configured.', 501)
+      }
+
+      return c.redirect('/auth/discord/start')
     }
 
-    if (action !== 'upvote' && action !== 'follow' && !canManage) {
+    if (action !== 'upvote' && action !== 'follow' && !access.canManage) {
       return c.text('Unauthorized', 401)
     }
 
@@ -1042,7 +1482,7 @@ export function createApp() {
 
     if (kind === 'bug') {
       if (action === 'upvote') {
-        const upvoteResult = await upvoteBug(c.env.DB, id, viewerId as string)
+        const upvoteResult = await upvoteBug(c.env.DB, id, access.viewerId as string)
         if (!upvoteResult.ok) {
           result = upvoteResult
         } else {
@@ -1050,11 +1490,11 @@ export function createApp() {
           result = { ok: true as const }
         }
       } else if (action === 'follow') {
-        const currentlySubscribed = await isSubscribed(c.env.DB, 'bug', id, viewerId as string)
+        const currentlySubscribed = await isSubscribed(c.env.DB, 'bug', id, access.viewerId as string)
         if (currentlySubscribed) {
-          await removeSubscription(c.env.DB, 'bug', id, viewerId as string)
+          await removeSubscription(c.env.DB, 'bug', id, access.viewerId as string)
         } else {
-          await addSubscription(c.env.DB, 'bug', id, viewerId as string)
+          await addSubscription(c.env.DB, 'bug', id, access.viewerId as string)
         }
         await syncBugMessage(c.env, client, id)
         result = { ok: true as const }
@@ -1063,7 +1503,7 @@ export function createApp() {
       }
     } else if (kind === 'feedback' || kind === 'suggestion') {
       if (action === 'upvote') {
-        const upvoteResult = await upvoteFeature(c.env.DB, id, viewerId as string)
+        const upvoteResult = await upvoteFeature(c.env.DB, id, access.viewerId as string)
         if (!upvoteResult.ok) {
           result = upvoteResult
         } else {
@@ -1071,11 +1511,11 @@ export function createApp() {
           result = { ok: true as const }
         }
       } else if (action === 'follow') {
-        const currentlySubscribed = await isSubscribed(c.env.DB, 'feature', id, viewerId as string)
+        const currentlySubscribed = await isSubscribed(c.env.DB, 'feature', id, access.viewerId as string)
         if (currentlySubscribed) {
-          await removeSubscription(c.env.DB, 'feature', id, viewerId as string)
+          await removeSubscription(c.env.DB, 'feature', id, access.viewerId as string)
         } else {
-          await addSubscription(c.env.DB, 'feature', id, viewerId as string)
+          await addSubscription(c.env.DB, 'feature', id, access.viewerId as string)
         }
         await syncFeatureMessage(c.env, client, id)
         result = { ok: true as const }
